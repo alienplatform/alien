@@ -327,7 +327,7 @@ async fn imported_continuation_leaves_a_registered_live_sandbox_to_runtime() -> 
 #[tokio::test]
 async fn imported_continuation_refuses_a_live_sandbox_registered_as_built() -> Result<()> {
     for egress in [
-        alien_core::SandboxEgress::Allow,
+        alien_core::SandboxEgress::None,
         alien_core::SandboxEgress::Internet,
     ] {
         let mut sandbox = live_sandbox_entry();

@@ -1450,9 +1450,12 @@ pub fn check_sandbox_template(
         alien_core::SandboxCode::Image { image, .. } => image,
         _ => return Err(refused("the signed sandbox has no built image")),
     };
-    let signed_egress = sandbox.egress.internet_access_switch().ok_or_else(|| {
-        refused("the signed sandbox's egress is not one Agent Platform expresses")
-    })?;
+    if matches!(sandbox.egress, alien_core::SandboxEgress::Removed(_)) {
+        return Err(refused("the signed sandbox's egress mode was removed"));
+    }
+    // Agent Platform's own internet switch stays closed: `internet` leaves only through the
+    // network attachment into the deployment's VPC, where the egress gateway applies the rules.
+    let signed_egress = false;
     let limits = sandbox.resolved_limits();
     let own_name = format!("{prefix}-{}", sandbox.id());
     let template: alien_gcp_clients::gcp::agent_platform::SandboxEnvironmentTemplate =

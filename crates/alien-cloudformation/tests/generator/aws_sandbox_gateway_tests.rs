@@ -289,15 +289,13 @@ fn an_internet_sandbox_without_its_gateway_is_refused() {
 #[tokio::test]
 async fn a_legacy_sandbox_setup_template_has_no_gateway() {
     for shape in [Shape::SandboxOnly, Shape::SandboxAndContainer] {
-        for egress in [SandboxEgress::None, SandboxEgress::Allow] {
-            let settings = settings();
-            let prepared =
-                prepare_for_setup_template(stack(shape, egress.clone()), &settings).await;
-            assert!(
-                !has_sandbox_gateway(&prepared),
-                "{shape:?} {egress:?}: legacy egress must not install the gateway"
-            );
-        }
+        let egress = SandboxEgress::None;
+        let settings = settings();
+        let prepared = prepare_for_setup_template(stack(shape, egress.clone()), &settings).await;
+        assert!(
+            !has_sandbox_gateway(&prepared),
+            "{shape:?} {egress:?}: legacy egress must not install the gateway"
+        );
     }
 }
 

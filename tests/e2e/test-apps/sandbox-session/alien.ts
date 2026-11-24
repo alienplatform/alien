@@ -9,7 +9,7 @@ const agents = new alien.Sandbox("agents")
     src: "./sandbox",
     toolchain: { type: "docker", dockerfile: "Dockerfile" },
   })
-  .egress({ mode: "allow" })
+  .egress("none")
   .lifecycle({ maxLifetimeSeconds: 900 })
   .build()
 

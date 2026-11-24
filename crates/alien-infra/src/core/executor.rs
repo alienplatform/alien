@@ -198,6 +198,24 @@ pub const REPLACE_DELETE_DENIED_CODE: &str = "REPLACE_DELETE_DENIED";
 /// controller with a RefreshFailed handler recovers by being stepped again.
 /// Controllers that declare RefreshFailed via `terminal_state!` step as a
 /// no-op, so this is safe universally.
+/// Refuses to create or update a sandbox whose egress mode was removed. The stored state of an
+/// install that declared one stays readable and its sandboxes keep running; the first change to
+/// it fails with the replacement named.
+fn refuse_removed_sandbox_egress(status: ResourceStatus, config: &Resource) -> Result<()> {
+    if !matches!(status, ResourceStatus::Provisioning | ResourceStatus::Updating) {
+        return Ok(());
+    }
+    let Some(sandbox) = config.downcast_ref::<alien_core::Sandbox>() else {
+        return Ok(());
+    };
+    sandbox.ensure_egress_supported().map_err(|error| {
+        AlienError::new(ErrorData::ResourceConfigInvalid {
+            message: error.message,
+            resource_id: Some(sandbox.id().to_string()),
+        })
+    })
+}
+
 fn status_halts_stepping(status: ResourceStatus) -> bool {
     status.is_terminal() && status != ResourceStatus::RefreshFailed
 }
@@ -290,6 +308,84 @@ fn controller_platform_for_state(stack_platform: Platform, state: &StackResource
             Some(&state.config),
         )
     })
+}
+
+#[cfg(test)]
+mod removed_egress_tests {
+    use super::*;
+
+    /// A sandbox recorded by a released version that declared the removed `allow` mode, in the
+    /// JSON spelling that version wrote.
+    fn stored_allow_sandbox() -> StackResourceState {
+        serde_json::from_value(serde_json::json!({
+            "type": "sandbox",
+            "config": {
+                "id": "sandbox",
+                "code": { "type": "image", "image": "s3://example-bundles/analysis/v1/bundle.zip" },
+                "type": "sandbox",
+                "egress": { "mode": "allow" },
+                "lifecycle": { "maxLifetimeSeconds": 28800, "idlePauseSeconds": 600 }
+            },
+            "status": "running",
+            "outputs": {
+                "type": "sandbox",
+                "identifier": "arn:aws:lambda:us-east-2:123456789012:microvm-image:example-sandbox",
+                "parentName": "arn:aws:lambda:us-east-2:123456789012:microvm-image:example-sandbox"
+            },
+            "lifecycle": "frozen",
+            "dependencies": [],
+            "controllerPlatform": "aws"
+        }))
+        .expect("a stored state holding the removed mode still deserializes")
+    }
+
+    #[test]
+    fn creating_or_updating_a_removed_egress_mode_fails_with_the_replacement_named() {
+        let stored = stored_allow_sandbox();
+        for status in [ResourceStatus::Provisioning, ResourceStatus::Updating] {
+            let error = refuse_removed_sandbox_egress(status, &stored.config)
+                .expect_err("a removed mode is never applied");
+            let message = error.to_string();
+            assert!(message.contains("egress mode 'allow'"), "{message}");
+            assert!(message.contains("egress: \"internet\""), "{message}");
+            assert!(!error.retryable);
+        }
+    }
+
+    #[test]
+    fn a_running_sandbox_a_delete_and_a_teardown_still_go_through() {
+        let stored = stored_allow_sandbox();
+        for status in [
+            ResourceStatus::Running,
+            ResourceStatus::Deleting,
+            ResourceStatus::DeleteFailed,
+            ResourceStatus::TeardownRequired,
+            ResourceStatus::RefreshFailed,
+        ] {
+            refuse_removed_sandbox_egress(status, &stored.config)
+                .unwrap_or_else(|error| panic!("{status:?} must not be refused: {error}"));
+        }
+    }
+
+    #[test]
+    fn updating_to_internet_or_none_is_not_refused() {
+        for egress in [alien_core::SandboxEgress::Internet, alien_core::SandboxEgress::None] {
+            let sandbox = alien_core::Sandbox::new("sandbox".to_string())
+                .code(alien_core::SandboxCode::Image {
+                    image: "python:3.13-slim".to_string(),
+                    bundled_from: None,
+                })
+                .egress(egress)
+                .lifecycle(alien_core::SandboxLifecyclePolicy {
+                    max_lifetime_seconds: None,
+                    idle_pause_seconds: None,
+                    ..Default::default()
+                })
+                .build();
+            refuse_removed_sandbox_egress(ResourceStatus::Updating, &Resource::new(sandbox))
+                .expect("a supported mode applies");
+        }
+    }
 }
 
 #[cfg(test)]
@@ -3461,8 +3557,17 @@ impl StackExecutor {
                     current_resource_state.get_internal_controller()?.unwrap();
 
                 let step_result = if !status_halts_stepping(resource_controller.get_status()) {
-                    // The controller now returns a step result with suggested delay
-                    resource_controller.step(&context).await
+                    // A create or update never applies a removed sandbox egress mode; a delete,
+                    // a teardown and a health check of a running sandbox still go through.
+                    if let Err(error) = refuse_removed_sandbox_egress(
+                        resource_controller.get_status(),
+                        &context_resource,
+                    ) {
+                        Err(error)
+                    } else {
+                        // The controller now returns a step result with suggested delay
+                        resource_controller.step(&context).await
+                    }
                 } else {
                     // If already terminal, no step needed
                     Ok(ResourceControllerStepResult {

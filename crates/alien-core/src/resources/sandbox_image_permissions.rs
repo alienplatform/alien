@@ -840,19 +840,6 @@ mod tests {
                 sandbox.image_user = Some(0);
                 sandbox.validate_for_platform(Platform::Aws).unwrap();
             }
-            for egress in [
-                crate::SandboxEgress::Allow,
-                crate::SandboxEgress::AllowDomains {
-                    domains: vec!["example.com".into()],
-                },
-            ] {
-                let mut sandbox = declared();
-                sandbox.egress = egress;
-                let error = sandbox
-                    .validate_for_platform(Platform::Aws)
-                    .expect_err("egress without the guest network");
-                assert!(error.to_string().contains("egress"), "{error}");
-            }
             let mut sandbox = declared();
             sandbox.image_user = Some(1000);
             let error = sandbox

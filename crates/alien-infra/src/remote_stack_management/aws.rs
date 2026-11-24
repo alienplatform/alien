@@ -2166,7 +2166,7 @@ mod tests {
                     image: "s3://acme-artifacts/sandbox-bundle/f00dcafe/bundle.zip".to_string(),
                     bundled_from: None,
                 })
-                .egress(SandboxEgress::Allow)
+                .egress(SandboxEgress::None)
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,

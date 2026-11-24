@@ -802,7 +802,7 @@ mod tests {
                 image: BUNDLE_URI.to_string(),
                 bundled_from: None,
             })
-            .egress(SandboxEgress::Allow)
+            .egress(SandboxEgress::Removed(alien_core::RemovedSandboxEgress::Allow))
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
@@ -1379,7 +1379,7 @@ mod tests {
         let frozen = |bundle: &str| {
             stack_as(
                 ResourceLifecycle::Frozen,
-                with(SandboxEgress::Allow, bundle),
+                with(SandboxEgress::Removed(alien_core::RemovedSandboxEgress::Allow), bundle),
                 None,
             )
         };
@@ -1394,7 +1394,7 @@ mod tests {
         );
         assert_eq!(
             changes(
-                &stack_of(with(SandboxEgress::Allow, BUNDLE_URI), None),
+                &stack_of(with(SandboxEgress::Removed(alien_core::RemovedSandboxEgress::Allow), BUNDLE_URI), None),
                 &frozen(BUNDLE_URI),
                 Platform::Aws
             ),
@@ -1433,7 +1433,7 @@ mod tests {
                 &allow,
                 &stack_of(
                     with(
-                        SandboxEgress::Allow,
+                        SandboxEgress::Removed(alien_core::RemovedSandboxEgress::Allow),
                         "s3://other-artifacts/sandbox-bundle/f00dcafe/bundle.zip"
                     ),
                     Some("net")
@@ -1448,7 +1448,7 @@ mod tests {
                 &allow,
                 &stack_of(
                     with(
-                        SandboxEgress::Allow,
+                        SandboxEgress::Removed(alien_core::RemovedSandboxEgress::Allow),
                         "s3://acme-artifacts/other-prefix/f00dcafe/bundle.zip"
                     ),
                     Some("net")

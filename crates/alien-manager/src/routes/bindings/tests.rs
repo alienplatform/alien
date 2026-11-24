@@ -211,7 +211,7 @@ fn sandbox_resource() -> Sandbox {
             image: "ubuntu:24.04".to_string(),
             bundled_from: None,
         })
-        .egress(SandboxEgress::Allow)
+        .egress(SandboxEgress::Removed(alien_core::RemovedSandboxEgress::Allow))
         .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
             idle_pause_seconds: None,
@@ -269,16 +269,21 @@ fn open_sandbox_binding_for(platform: Platform) -> SandboxBinding {
             "westus2",
             "rg",
             "ubuntu",
-            alien_core::SandboxEgress::Allow,
+            alien_core::SandboxEgress::Removed(alien_core::RemovedSandboxEgress::Allow),
             None,
         ),
-        Platform::Gcp => SandboxBinding::gcp_agent_platform(
-            GCP_ENGINE,
-            format!("{GCP_ENGINE}/sandboxEnvironmentTemplates/7"),
-            "us-central1",
-            Some(1800),
-            true,
-        ),
+        Platform::Gcp => {
+            let mut binding = SandboxBinding::gcp_agent_platform(
+                GCP_ENGINE,
+                format!("{GCP_ENGINE}/sandboxEnvironmentTemplates/7"),
+                "us-central1",
+                Some(1800),
+            );
+            if let SandboxBinding::GcpAgentPlatform(value) = &mut binding {
+                value.allow_egress = true;
+            }
+            binding
+        }
         _ => open_sandbox_binding(),
     }
 }
@@ -316,13 +321,15 @@ fn remote_sandbox_validation_returns_the_topology_a_session_is_started_from() {
 #[test]
 fn remote_gcp_sandbox_binding_reports_the_declared_egress() {
     for allow_egress in [true, false] {
-        let binding = SandboxBinding::gcp_agent_platform(
+        let mut binding = SandboxBinding::gcp_agent_platform(
             GCP_ENGINE,
             format!("{GCP_ENGINE}/sandboxEnvironmentTemplates/7"),
             "us-central1",
             None,
-            allow_egress,
         );
+        if let SandboxBinding::GcpAgentPlatform(value) = &mut binding {
+            value.allow_egress = allow_egress;
+        }
         let deployment =
             deployment_on_platform(sandbox_stack_state(binding, Platform::Gcp), Platform::Gcp);
 
@@ -619,13 +626,13 @@ fn remote_sandbox_never_erases_a_new_internet_declaration() {
 #[test]
 fn azure_remote_sandbox_accepts_only_legacy_open_egress() {
     for (egress, allowed) in [
-        (SandboxEgress::Allow, true),
+        (SandboxEgress::Removed(alien_core::RemovedSandboxEgress::Allow), true),
         (SandboxEgress::Internet, false),
         (SandboxEgress::None, false),
         (
-            SandboxEgress::AllowDomains {
+            SandboxEgress::Removed(alien_core::RemovedSandboxEgress::AllowDomains {
                 domains: vec!["example.com".into()],
-            },
+            }),
             false,
         ),
     ] {

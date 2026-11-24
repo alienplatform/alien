@@ -1876,9 +1876,10 @@ mod tests {
         assert_eq!(restored.disk_image.as_deref(), Some("ubuntu"));
         assert_eq!(
             restored.egress.as_ref().unwrap().declaration(),
-            &SandboxEgress::AllowDomains {
+            &SandboxEgress::Removed(alien_core::RemovedSandboxEgress::AllowDomains {
                 domains: vec!["api.example.com".to_string()],
-            }
+            }),
+            "a persisted removed mode still reads"
         );
         assert!(restored.egress.as_ref().unwrap().default_policy().is_none());
         assert_eq!(restored.idle_pause_seconds, Some(300));
@@ -2229,7 +2230,7 @@ mod tests {
                     image: image.to_string(),
                     bundled_from: None,
                 })
-                .egress(SandboxEgress::Allow)
+                .egress(SandboxEgress::None)
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,
@@ -2255,7 +2256,7 @@ mod tests {
                 retired_disk_images: Vec::new(),
                 pending_disk_image: None,
                 built_disk_images: false,
-                egress: Some(SandboxEgress::Allow.into()),
+                egress: Some(SandboxEgress::None.into()),
                 idle_pause_seconds: None,
                 limits: None,
                 egress_network_verified: false,
@@ -2398,7 +2399,6 @@ mod tests {
             // An Internet sandbox always gets the gateway container from the mutations.
             for (egress, with_gateway) in [
                 (SandboxEgress::Internet, true),
-                (SandboxEgress::Allow, false),
                 (SandboxEgress::None, false),
             ] {
                 let gateway = egress == SandboxEgress::Internet && with_gateway;
@@ -2550,13 +2550,7 @@ mod tests {
                     availability_zones: 2,
                 })
                 .build();
-            for egress in [
-                SandboxEgress::Allow,
-                SandboxEgress::AllowDomains {
-                    domains: vec!["api.example.com".into()],
-                },
-                SandboxEgress::None,
-            ] {
+            for egress in [SandboxEgress::None] {
                 let mut declared = sandbox(PYTHON);
                 declared.egress = egress.clone();
                 let mut controller = adopted(Some(PYTHON), Some("img-1"));

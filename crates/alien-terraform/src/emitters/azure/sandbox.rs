@@ -993,7 +993,10 @@ mod tests {
                 );
             let builder = if remote_access {
                 builder.add_with_remote_access(
-                    base.egress(SandboxEgress::Allow).build(),
+                    base.egress(SandboxEgress::Removed(
+                        alien_core::RemovedSandboxEgress::Allow,
+                    ))
+                    .build(),
                     ResourceLifecycle::Frozen,
                 )
             } else {

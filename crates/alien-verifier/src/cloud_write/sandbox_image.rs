@@ -238,7 +238,7 @@ mod tests {
                 image: signed_image(),
                 bundled_from: None,
             })
-            .egress(SandboxEgress::Allow)
+            .egress(SandboxEgress::None)
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,

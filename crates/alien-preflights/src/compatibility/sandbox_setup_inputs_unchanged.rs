@@ -126,7 +126,12 @@ mod tests {
     const BUNDLE_V1: &str = "s3://bucket/sandbox-bundle/v1/bundle.zip";
 
     fn stack(private_base_image: Option<&str>, image: &str) -> Stack {
-        stack_with(private_base_image, image, SandboxEgress::Allow, "net-a")
+        stack_with(
+            private_base_image,
+            image,
+            SandboxEgress::Removed(alien_core::RemovedSandboxEgress::Allow),
+            "net-a",
+        )
     }
 
     fn stack_with(

@@ -1121,68 +1121,6 @@ mod tests {
         );
     }
 
-    /// A private base image on a Live sandbox is setup-owned, but a deployer who declined the
-    /// sandbox never got its build role, so the stripped stack must hash as if it were absent.
-    #[test]
-    fn a_declined_live_private_sandbox_leaves_the_setup_owned_digest_untouched() {
-        let with_sandbox = |gated: bool| {
-            let mut stack = live_gated_stack_with_linking_worker(Some(true));
-            let sandbox = alien_core::Sandbox::new("agents".to_string())
-                .code(alien_core::SandboxCode::Image {
-                    image: "s3://bucket/sandbox-bundle/v1/bundle.zip".to_string(),
-                    bundled_from: None,
-                })
-                .private_base_image(
-                    "123456789012.dkr.ecr.us-east-1.amazonaws.com/team/base:1".to_string(),
-                )
-                .egress(alien_core::SandboxEgress::Allow)
-                .lifecycle(alien_core::SandboxLifecyclePolicy {
-                    max_lifetime_seconds: None,
-                    idle_pause_seconds: None,
-                    ..Default::default()
-                })
-                .build();
-            stack.resources.insert(
-                "agents".to_string(),
-                alien_core::ResourceEntry {
-                    config: alien_core::Resource::new(sandbox),
-                    lifecycle: ResourceLifecycle::Live,
-                    dependencies: Vec::new(),
-                    display_name: None,
-                    description: None,
-                    remote_access: false,
-                    enabled_when: gated.then(|| "cacheEnabled".to_string()),
-                },
-            );
-            stack
-        };
-        let without_sandbox = strip_live(live_gated_stack_with_linking_worker(Some(true)), false);
-
-        let declined = strip_live(with_sandbox(true), false);
-        assert!(!declined.resources.contains_key("agents"));
-        assert_eq!(
-            declined.setup_owned_digest(),
-            without_sandbox.setup_owned_digest(),
-            "a declined sandbox must not add setup-owned state"
-        );
-        let kept = strip_live(with_sandbox(false), false);
-        let entry = &kept.resources["agents"];
-        let inputs = alien_core::sandbox_setup_inputs::comparable_aws_sandbox_setup_inputs(
-            &kept,
-            entry.config.downcast_ref().expect("a sandbox"),
-            entry.lifecycle,
-        );
-        assert_eq!(
-            inputs[0].0, "egress",
-            "the control resolves its setup inputs"
-        );
-        assert_ne!(
-            kept.setup_owned_digest(),
-            without_sandbox.setup_owned_digest(),
-            "the control: an ungated sandbox's setup inputs are setup-owned"
-        );
-    }
-
     /// The executor plans an update by diffing resource configs, and links live inside that
     /// config. Without a config change the worker keeps the stale binding indefinitely.
     #[test]

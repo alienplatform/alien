@@ -525,7 +525,12 @@ mod tests {
     #[tokio::test]
     async fn a_frozen_remote_sandbox_is_granted_the_remote_execute_set() {
         let stack = Stack::new("byo-sandbox".to_string())
-            .add_with_remote_access(sandbox(SandboxEgress::Allow), ResourceLifecycle::Frozen)
+            .add_with_remote_access(
+                sandbox(SandboxEgress::Removed(
+                    alien_core::RemovedSandboxEgress::Allow,
+                )),
+                ResourceLifecycle::Frozen,
+            )
             .build();
         let state = StackState::new(Platform::Aws);
 
@@ -561,7 +566,12 @@ mod tests {
     #[tokio::test]
     async fn a_live_remote_sandbox_is_granted_the_remote_execute_set() {
         let stack = Stack::new("byo-sandbox".to_string())
-            .add_with_remote_access(sandbox(SandboxEgress::Allow), ResourceLifecycle::Live)
+            .add_with_remote_access(
+                sandbox(SandboxEgress::Removed(
+                    alien_core::RemovedSandboxEgress::Allow,
+                )),
+                ResourceLifecycle::Live,
+            )
             .build();
         let state = StackState::new(Platform::Aws);
 
@@ -589,7 +599,12 @@ mod tests {
     async fn a_remote_sandbox_is_refused_where_its_permission_set_grants_nothing() {
         for platform in [Platform::Azure, Platform::Gcp] {
             let covered = Stack::new("byo-sandbox".to_string())
-                .add_with_remote_access(sandbox(SandboxEgress::Allow), ResourceLifecycle::Frozen)
+                .add_with_remote_access(
+                    sandbox(SandboxEgress::Removed(
+                        alien_core::RemovedSandboxEgress::Allow,
+                    )),
+                    ResourceLifecycle::Frozen,
+                )
                 .build();
             RemoteBindingsMutation
                 .mutate(covered, &StackState::new(platform), &config())
@@ -601,7 +616,12 @@ mod tests {
 
         for platform in [Platform::Kubernetes, Platform::Local] {
             let stack = Stack::new("byo-sandbox".to_string())
-                .add_with_remote_access(sandbox(SandboxEgress::Allow), ResourceLifecycle::Frozen)
+                .add_with_remote_access(
+                    sandbox(SandboxEgress::Removed(
+                        alien_core::RemovedSandboxEgress::Allow,
+                    )),
+                    ResourceLifecycle::Frozen,
+                )
                 .build();
 
             let error = RemoteBindingsMutation
@@ -637,7 +657,12 @@ mod tests {
         };
         let stack = || {
             Stack::new("byo-sandbox".to_string())
-                .add_with_remote_access(sandbox(SandboxEgress::Allow), ResourceLifecycle::Frozen)
+                .add_with_remote_access(
+                    sandbox(SandboxEgress::Removed(
+                        alien_core::RemovedSandboxEgress::Allow,
+                    )),
+                    ResourceLifecycle::Frozen,
+                )
                 .build()
         };
 
@@ -676,7 +701,12 @@ mod tests {
     #[tokio::test]
     async fn a_remote_sandbox_is_refused_on_the_base_platform_the_config_selects() {
         let stack = Stack::new("byo-sandbox".to_string())
-            .add_with_remote_access(sandbox(SandboxEgress::Allow), ResourceLifecycle::Frozen)
+            .add_with_remote_access(
+                sandbox(SandboxEgress::Removed(
+                    alien_core::RemovedSandboxEgress::Allow,
+                )),
+                ResourceLifecycle::Frozen,
+            )
             .build();
         let mut config = config();
         config.base_platform = Some(Platform::Kubernetes);
@@ -699,7 +729,12 @@ mod tests {
     #[tokio::test]
     async fn a_named_session_set_under_another_key_still_reaches_the_sandbox_on_gcp() {
         let stack = Stack::new("application".to_string())
-            .add_with_remote_access(sandbox(SandboxEgress::Allow), ResourceLifecycle::Frozen)
+            .add_with_remote_access(
+                sandbox(SandboxEgress::Removed(
+                    alien_core::RemovedSandboxEgress::Allow,
+                )),
+                ResourceLifecycle::Frozen,
+            )
             .permission(
                 "execution",
                 PermissionProfile::new().resource("some-worker", ["sandbox/execute"]),
@@ -767,9 +802,13 @@ mod tests {
     #[tokio::test]
     async fn a_remote_sandbox_that_restricts_egress_is_refused() {
         for (egress, default_policy, reason) in [
-            (SandboxEgress::None, None, "must declare egress 'allow'"),
             (
-                SandboxEgress::Allow,
+                SandboxEgress::None,
+                None,
+                "cannot be published through a remote binding yet",
+            ),
+            (
+                SandboxEgress::Removed(alien_core::RemovedSandboxEgress::Allow),
                 Some(alien_core::EgressPolicy::Allow {
                     allow: vec!["api.example.com".into()],
                 }),
@@ -800,7 +839,12 @@ mod tests {
     #[tokio::test]
     async fn a_remote_sandbox_rejects_another_published_resource() {
         let stack = Stack::new("application".to_string())
-            .add_with_remote_access(sandbox(SandboxEgress::Allow), ResourceLifecycle::Frozen)
+            .add_with_remote_access(
+                sandbox(SandboxEgress::Removed(
+                    alien_core::RemovedSandboxEgress::Allow,
+                )),
+                ResourceLifecycle::Frozen,
+            )
             .add_with_remote_access(
                 Storage::new("exports".to_string()).build(),
                 ResourceLifecycle::Frozen,
@@ -824,7 +868,12 @@ mod tests {
     #[tokio::test]
     async fn a_remote_sandbox_allows_non_remote_application_resources() {
         let stack = Stack::new("application".to_string())
-            .add_with_remote_access(sandbox(SandboxEgress::Allow), ResourceLifecycle::Frozen)
+            .add_with_remote_access(
+                sandbox(SandboxEgress::Removed(
+                    alien_core::RemovedSandboxEgress::Allow,
+                )),
+                ResourceLifecycle::Frozen,
+            )
             .add(
                 Storage::new("internal".to_string()).build(),
                 ResourceLifecycle::Frozen,
@@ -850,7 +899,9 @@ mod tests {
     /// the same MicroVM image the remote caller's credentials address.
     #[tokio::test]
     async fn a_remote_sandbox_linked_by_compute_is_refused() {
-        let sandbox = sandbox(SandboxEgress::Allow);
+        let sandbox = sandbox(SandboxEgress::Removed(
+            alien_core::RemovedSandboxEgress::Allow,
+        ));
         let worker = Worker::new("processor".to_string())
             .permissions("execution".to_string())
             .code(WorkerCode::Image {
@@ -882,7 +933,12 @@ mod tests {
     #[tokio::test]
     async fn a_remote_sandbox_granted_to_the_management_profile_is_refused() {
         let stack = Stack::new("application".to_string())
-            .add_with_remote_access(sandbox(SandboxEgress::Allow), ResourceLifecycle::Frozen)
+            .add_with_remote_access(
+                sandbox(SandboxEgress::Removed(
+                    alien_core::RemovedSandboxEgress::Allow,
+                )),
+                ResourceLifecycle::Frozen,
+            )
             .management(alien_core::ManagementPermissions::extend(
                 PermissionProfile::new().resource("agents", ["sandbox/execute"]),
             ))
@@ -906,7 +962,12 @@ mod tests {
     #[tokio::test]
     async fn a_global_management_entry_is_left_to_the_claim_filter() {
         let stack = Stack::new("application".to_string())
-            .add_with_remote_access(sandbox(SandboxEgress::Allow), ResourceLifecycle::Frozen)
+            .add_with_remote_access(
+                sandbox(SandboxEgress::Removed(
+                    alien_core::RemovedSandboxEgress::Allow,
+                )),
+                ResourceLifecycle::Frozen,
+            )
             .management(alien_core::ManagementPermissions::extend(
                 PermissionProfile::new().global(["sandbox/execute"]),
             ))
@@ -947,7 +1008,12 @@ mod tests {
     #[tokio::test]
     async fn a_remote_sandbox_granted_to_a_profile_is_refused() {
         let stack = Stack::new("application".to_string())
-            .add_with_remote_access(sandbox(SandboxEgress::Allow), ResourceLifecycle::Frozen)
+            .add_with_remote_access(
+                sandbox(SandboxEgress::Removed(
+                    alien_core::RemovedSandboxEgress::Allow,
+                )),
+                ResourceLifecycle::Frozen,
+            )
             .permission(
                 "execution",
                 PermissionProfile::new().resource("agents", ["sandbox/management"]),
@@ -977,7 +1043,12 @@ mod tests {
             })
             .build();
         let stack = Stack::new("application".to_string())
-            .add_with_remote_access(sandbox(SandboxEgress::Allow), ResourceLifecycle::Frozen)
+            .add_with_remote_access(
+                sandbox(SandboxEgress::Removed(
+                    alien_core::RemovedSandboxEgress::Allow,
+                )),
+                ResourceLifecycle::Frozen,
+            )
             .add(worker, ResourceLifecycle::Live)
             .permission(
                 "execution",
@@ -1018,7 +1089,12 @@ mod tests {
         // Reach is the resolved verb, not the id: the vendor already holds the mint on the image,
         // so a workload that can merely start a session hands it every session of the sandbox.
         let stack = Stack::new("application".to_string())
-            .add_with_remote_access(sandbox(SandboxEgress::Allow), ResourceLifecycle::Frozen)
+            .add_with_remote_access(
+                sandbox(SandboxEgress::Removed(
+                    alien_core::RemovedSandboxEgress::Allow,
+                )),
+                ResourceLifecycle::Frozen,
+            )
             .permission(
                 "execution",
                 PermissionProfile::new().global([inline_run_microvm_set("custom/telemetry")]),
@@ -1047,7 +1123,12 @@ mod tests {
         set.platforms.aws.as_mut().unwrap()[0].grant.actions =
             Some(vec!["lambda:runmicrovm".to_string()]);
         let stack = Stack::new("application".to_string())
-            .add_with_remote_access(sandbox(SandboxEgress::Allow), ResourceLifecycle::Frozen)
+            .add_with_remote_access(
+                sandbox(SandboxEgress::Removed(
+                    alien_core::RemovedSandboxEgress::Allow,
+                )),
+                ResourceLifecycle::Frozen,
+            )
             .permission("execution", PermissionProfile::new().global([set]))
             .build();
 
@@ -1064,7 +1145,12 @@ mod tests {
             .stack_permission_set(inline_run_microvm_set("custom/telemetry"))
             .build();
         let stack = Stack::new("application".to_string())
-            .add_with_remote_access(sandbox(SandboxEgress::Allow), ResourceLifecycle::Frozen)
+            .add_with_remote_access(
+                sandbox(SandboxEgress::Removed(
+                    alien_core::RemovedSandboxEgress::Allow,
+                )),
+                ResourceLifecycle::Frozen,
+            )
             .add(account, ResourceLifecycle::Live)
             .build();
 
@@ -1091,7 +1177,12 @@ mod tests {
         )
         .unwrap();
         let mut stack = Stack::new("application".to_string())
-            .add_with_remote_access(sandbox(SandboxEgress::Allow), ResourceLifecycle::Frozen)
+            .add_with_remote_access(
+                sandbox(SandboxEgress::Removed(
+                    alien_core::RemovedSandboxEgress::Allow,
+                )),
+                ResourceLifecycle::Frozen,
+            )
             .add(zone, ResourceLifecycle::Frozen)
             .build();
         let mut records_write = serde_json::to_value(inline_run_microvm_set("x")).unwrap();
@@ -1232,7 +1323,12 @@ mod tests {
                 .stack_permission_set(azure_set("custom/telemetry", grant))
                 .build();
             let stack = Stack::new("application".to_string())
-                .add_with_remote_access(sandbox(SandboxEgress::Allow), ResourceLifecycle::Frozen)
+                .add_with_remote_access(
+                    sandbox(SandboxEgress::Removed(
+                        alien_core::RemovedSandboxEgress::Allow,
+                    )),
+                    ResourceLifecycle::Frozen,
+                )
                 .add(account, ResourceLifecycle::Live)
                 .build();
 
@@ -1271,7 +1367,12 @@ mod tests {
         .expect("valid inline permission set");
 
         let stack = Stack::new("application".to_string())
-            .add_with_remote_access(sandbox(SandboxEgress::Allow), ResourceLifecycle::Frozen)
+            .add_with_remote_access(
+                sandbox(SandboxEgress::Removed(
+                    alien_core::RemovedSandboxEgress::Allow,
+                )),
+                ResourceLifecycle::Frozen,
+            )
             .permission(
                 "execution",
                 // Filed under a worker, not under the sandbox and not under `*`.
@@ -1301,7 +1402,12 @@ mod tests {
     #[tokio::test]
     async fn a_named_session_set_targeted_at_another_resource_is_allowed() {
         let stack = Stack::new("application".to_string())
-            .add_with_remote_access(sandbox(SandboxEgress::Allow), ResourceLifecycle::Frozen)
+            .add_with_remote_access(
+                sandbox(SandboxEgress::Removed(
+                    alien_core::RemovedSandboxEgress::Allow,
+                )),
+                ResourceLifecycle::Frozen,
+            )
             .permission(
                 "execution",
                 PermissionProfile::new().resource("some-worker", ["sandbox/execute"]),
@@ -1332,7 +1438,12 @@ mod tests {
             .expect("valid inline permission set");
 
         let stack = Stack::new("application".to_string())
-            .add_with_remote_access(sandbox(SandboxEgress::Allow), ResourceLifecycle::Frozen)
+            .add_with_remote_access(
+                sandbox(SandboxEgress::Removed(
+                    alien_core::RemovedSandboxEgress::Allow,
+                )),
+                ResourceLifecycle::Frozen,
+            )
             .permission("execution", PermissionProfile::new().global([future_verb]))
             .build();
 
@@ -1364,7 +1475,12 @@ mod tests {
             .expect("valid inline permission set");
 
         let stack = Stack::new("application".to_string())
-            .add_with_remote_access(sandbox(SandboxEgress::Allow), ResourceLifecycle::Frozen)
+            .add_with_remote_access(
+                sandbox(SandboxEgress::Removed(
+                    alien_core::RemovedSandboxEgress::Allow,
+                )),
+                ResourceLifecycle::Frozen,
+            )
             .permission("execution", PermissionProfile::new().global([image_only]))
             .build();
 

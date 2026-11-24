@@ -719,15 +719,6 @@ pub(crate) async fn resolve_operator_address(
                 "the Operator's Service '{name}' needs an IPv4 ClusterIP for the sandbox network check"
             ))
         })?;
-    // Under the deprecated direct-egress policy only non-public ranges are blocked, so a
-    // publicly numbered Service address would stay reachable and no pod could prove its policy.
-    if matches!(sandbox.egress, alien_core::SandboxEgress::Allow)
-        && alien_core::is_public_ipv4(address)
-    {
-        return Err(invalid(format!(
-            "the Operator's Service '{name}' has the publicly numbered address {address}, which the direct-egress policy cannot block, so a sandbox pod could not prove its network policy; use a private Service range or egress 'internet'"
-        )));
-    }
     super::kubernetes_spec::remember_operator_address(format!("{address}:{port}"));
     Ok(())
 }
@@ -871,7 +862,6 @@ pub(crate) async fn replenish_warm_pool(
         &sandbox.id,
         namespace,
         &pod,
-        matches!(sandbox.egress, alien_core::SandboxEgress::Allow),
         &sandbox.preview_ports,
     )
     .await
@@ -1230,7 +1220,6 @@ async fn publish_pod_template(
     sandbox_id: &str,
     namespace: &str,
     pod: &k8s_openapi::api::core::v1::Pod,
-    requires_cluster_dns: bool,
     preview_ports: &[u16],
 ) -> Result<()> {
     let client = ctx
@@ -1253,18 +1242,10 @@ async fn publish_pod_template(
         })
     })?;
     let data = secret.data.get_or_insert_default();
-    let dns_flag = if requires_cluster_dns {
-        b"true".to_vec()
-    } else {
-        b"false".to_vec()
-    };
     let ports = serde_json::to_vec(preview_ports).unwrap_or_else(|_| b"[]".to_vec());
     if data
         .get(POD_TEMPLATE_SECRET_KEY)
         .is_some_and(|existing| existing.0 == template)
-        && data
-            .get(REQUIRES_CLUSTER_DNS_SECRET_KEY)
-            .is_some_and(|existing| existing.0 == dns_flag)
         && data
             .get(PREVIEW_PORTS_SECRET_KEY)
             .is_some_and(|existing| existing.0 == ports)
@@ -1274,10 +1255,6 @@ async fn publish_pod_template(
     data.insert(
         PREVIEW_PORTS_SECRET_KEY.to_string(),
         k8s_openapi::ByteString(ports),
-    );
-    data.insert(
-        REQUIRES_CLUSTER_DNS_SECRET_KEY.to_string(),
-        k8s_openapi::ByteString(dns_flag),
     );
     data.insert(
         POD_TEMPLATE_SECRET_KEY.to_string(),
@@ -2591,10 +2568,6 @@ const CAPABILITY_SECRET_KEY: &str = "signingKey";
 
 /// Key holding the idle pod the broker creates when no warm pod is free.
 pub(crate) const POD_TEMPLATE_SECRET_KEY: &str = "podTemplate";
-
-/// Key marking a sandbox whose network policy admits DNS only to `sandbox.clusterDNS`, so the
-/// broker checks that value before it starts a new session.
-pub(crate) const REQUIRES_CLUSTER_DNS_SECRET_KEY: &str = "requiresClusterDNS";
 
 /// Key holding the sandbox's declared preview ports, as a JSON array. The broker mints a preview
 /// capability only for a port in it, so what a caller asks for is checked against what the

@@ -1,4 +1,4 @@
-"""Released object policies keep their direct, UID-filtered supervisor path."""
+"""The released `deny` object policy keeps its direct, UID-filtered supervisor path."""
 import json
 
 from agent_capabilities import AGENT_CAP_ARGS
@@ -6,11 +6,9 @@ from docker_conformance import ORIGIN, PREFIX, docker
 
 
 def check_legacy_agents(suite, image, containers, uid):
-    for index, mode in enumerate(["deny", "allow", "allowDomains"], 10):
+    for index, mode in enumerate(["deny"], 10):
         name = PREFIX + "-legacy-" + mode.lower()
         policy = {"mode": mode}
-        if mode == "allowDomains":
-            policy["domains"] = ["Allowed.TEST."]
         docker("run", "-d", "--name", name, "--network", PREFIX,
                "--ip", f"93.184.216.{index}", "--dns", ORIGIN, *AGENT_CAP_ARGS,
                "-e", "ALIEN_SANDBOX_EGRESS=" + json.dumps(policy), image)
@@ -51,16 +49,12 @@ for host,port in [("93.184.216.2",80),("93.184.216.3",3128),("10.77.91.2",80)]:
   s.sendall(b"GET / HTTP/1.1\r\nHost: allowed.test\r\nConnection: close\r\n\r\n")
   response=http.client.HTTPResponse(s);response.begin();assert response.status==200 and response.read()==b"controlled-origin-response\n"
  s.close()
-for host,port,allowed in [("93.184.216.2",80,MODE!="deny"),("93.184.216.3",3128,MODE=="allow"),("10.77.91.2",80,False)]:
+for host,port,allowed in [("93.184.216.2",80,False),("93.184.216.3",3128,False),("10.77.91.2",80,False)]:
  program=f"""import socket
 try:
  s=socket.create_connection(({host!r},{port}),timeout=.4);s.close();print('allowed')
 except (TimeoutError,PermissionError):print('denied')"""
  assert execute(program)==("allowed" if allowed else "denied"),(MODE,host)
-if MODE=="allowDomains":
- assert execute("import socket;print(socket.gethostbyname('allowed.test'),socket.gethostbyname('allowed.test.'))")=="93.184.216.2 93.184.216.2"
- assert "93.184.216.2 allowed.test allowed.test." in Path("/etc/hosts").read_text()
- assert execute("import os;print(os.access('/etc/hosts',os.W_OK))")=="False"
 # The actual exec boundary denies IPv6 and raw packets, independently of image tools.
 for expression in ["socket.socket(socket.AF_INET6,socket.SOCK_STREAM)","socket.socket(socket.AF_INET,socket.SOCK_RAW,socket.IPPROTO_TCP)"]:
  program=f"""import socket
@@ -79,7 +73,7 @@ for port in [53,5354]:
 s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);s.settimeout(.4)
 try:s.sendto(b'echo',('127.0.0.1',{port}));print(s.recv(1024).decode())
 except (TimeoutError,PermissionError):print('blocked')"""
- assert execute(program)==('echo' if port==5354 or MODE=='allow' else 'blocked'),(MODE,port)
+ assert execute(program)==('echo' if port==5354 else 'blocked'),(MODE,port)
 print('legacy '+MODE+' passed without gateway or firewall tools')
 '''.replace("MODE_VALUE", repr(mode)).replace("UID_VALUE", str(uid))
         def probe(name=name, script=script, mode=mode):

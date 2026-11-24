@@ -2767,8 +2767,9 @@ mod tests {
                 "projects/example/locations/us-central1/sandboxEnvironmentTemplates/1",
                 "us-central1",
                 None,
-                allow_egress,
             );
+            let mut binding = serde_json::to_value(binding).unwrap();
+            binding["allowEgress"] = serde_json::json!(allow_egress);
             let provider = BindingsProvider::new(
                 alien_core::ClientConfig::Gcp(Box::new(alien_core::GcpClientConfig {
                     project_id: "example".into(),
@@ -2779,7 +2780,7 @@ mod tests {
                     service_overrides: None,
                     project_number: None,
                 })),
-                HashMap::from([("box".into(), serde_json::to_value(binding).unwrap())]),
+                HashMap::from([("box".into(), binding)]),
             )
             .unwrap();
             provider
@@ -2800,7 +2801,6 @@ mod tests {
             "projects/example/locations/us-central1/sandboxEnvironmentTemplates/1",
             "us-central1",
             None,
-            false,
         );
         let alien_core::SandboxBinding::GcpAgentPlatform(inner) = &mut binding else {
             unreachable!()
@@ -2925,8 +2925,9 @@ mod tests {
                 "projects/p/locations/us-central1/reasoningEngines/123/sandboxEnvironmentTemplates/1",
                 "us-central1",
                 Some(3600),
-                allow_egress,
             );
+            let mut binding = serde_json::to_value(binding).unwrap();
+            binding["allowEgress"] = serde_json::json!(allow_egress);
             let provider = BindingsProvider::new(
                 ClientConfig::Gcp(Box::new(alien_core::GcpClientConfig {
                     project_id: "p".into(),
@@ -2937,7 +2938,7 @@ mod tests {
                     },
                     service_overrides: None,
                 })),
-                HashMap::from([("box".into(), serde_json::to_value(binding).unwrap())]),
+                HashMap::from([("box".into(), binding)]),
             )
             .unwrap();
             let sandbox = provider

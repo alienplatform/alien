@@ -473,13 +473,7 @@ mod tests {
         let declared = directory.path().join("declared.zip");
         let agent = super::AgentSource::Image("example.com/agent:v1".into());
         write_bundle(&original, "example.com/base:v1", &agent).unwrap();
-        for egress in [
-            alien_core::SandboxEgress::None,
-            alien_core::SandboxEgress::Allow,
-            alien_core::SandboxEgress::AllowDomains {
-                domains: vec!["example.com".into()],
-            },
-        ] {
+        for egress in [alien_core::SandboxEgress::None] {
             super::write_declared_bundle(
                 &declared,
                 "example.com/base:v1",

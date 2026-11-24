@@ -152,7 +152,7 @@ async fn source_reaches_azure_and_gcp_frozen_through_the_runner() {
 /// `alien dev` runs the egress gateway beside the sandbox, so `internet` plans on Local.
 #[tokio::test]
 async fn local_hosts_the_gateway_for_internet_sandboxes() {
-    for egress in [SandboxEgress::Internet, SandboxEgress::Allow] {
+    for egress in [SandboxEgress::Internet] {
         let mut declared = sandbox(None);
         declared.egress = egress;
         let result = PreflightRunner::new()

@@ -35,7 +35,7 @@ docker run -d --name "$container" --cap-drop=ALL \
   -e ALIEN_SANDBOX_ROOT=/sandbox -e ALIEN_SANDBOX_PORT=8971 \
   -e ALIEN_SANDBOX_AUTHORIZATION=transport -e ALIEN_SANDBOX_ISOLATION=uid-split \
   -e ALIEN_SANDBOX_EXEC_UID=60001 -e ALIEN_SANDBOX_EXEC_GID=60001 \
-  -e 'ALIEN_SANDBOX_EGRESS={"mode":"allowDomains","domains":["Example.COM."]}' \
+  -e 'ALIEN_SANDBOX_EGRESS={"mode":"deny"}' \
   --entrypoint /usr/local/bin/alien-sandbox-agent "$image" >/dev/null
 container_created=true
 # The test driver is external to the supervisor. Its root identity permits transport-mode calls;
@@ -75,12 +75,10 @@ assert 'CapEff:\t0000000000000000' in out and 'CapBnd:\t0000000000000000' in out
 assert out.endswith('60001\nCapEff:\t0000000000000000\n'),out
 for command in [['/usr/sbin/nft','flush','ruleset'],['/usr/sbin/iptables-nft','-P','OUTPUT','ACCEPT'],['/bin/sh','-c','echo overwritten >> /etc/hosts']]:
     out,terminal=execute(command); assert terminal['t']=='exit' and terminal['code']!=0,(command,out,terminal)
-# This qualifies routing, independent of the test host's TLS interception trust store.
+# Under deny a command reaches no host, by name or by address.
 for hostname in ['example.com']:
-    out,terminal=execute(['/usr/bin/curl','-4','-k','-sS','-o','/dev/null','-w','%{http_code}','--max-time','8','https://'+hostname])
-    assert out=='200' and terminal['code']==0,(hostname,out,terminal)
-out,terminal=execute(['/usr/bin/python3','-c',"import socket; a={x[4][0] for x in socket.getaddrinfo('example.com',443,socket.AF_INET)}; b={x[4][0] for x in socket.getaddrinfo('example.com.',443,socket.AF_INET)}; print(bool(a) and a==b)"])
-assert out.strip()=='True' and terminal['code']==0,(out,terminal)
+    out,terminal=execute(['/usr/bin/curl','-4','-k','-sS','-o','/dev/null','-w','%{http_code}','--max-time','4','https://'+hostname])
+    assert terminal['code']!=0 and out!='200',(hostname,out,terminal)
 out,terminal=execute(['/usr/bin/curl','-4','-k','-sS','-o','/dev/null','--max-time','2','https://1.1.1.1'])
 assert terminal['code']==28,(out,terminal)
 out,terminal=execute(['/usr/bin/python3','-c','import socket; socket.socket(socket.AF_INET6,socket.SOCK_STREAM)'])

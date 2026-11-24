@@ -2051,11 +2051,7 @@ mod tests {
         use alien_core::{Sandbox, SandboxCode, SandboxEgress};
         for platform in [Platform::Gcp, Platform::Aws, Platform::Azure] {
             for lifecycle in [ResourceLifecycle::Live, ResourceLifecycle::Frozen] {
-                for egress in [
-                    SandboxEgress::None,
-                    SandboxEgress::Allow,
-                    SandboxEgress::Internet,
-                ] {
+                for egress in [SandboxEgress::None, SandboxEgress::Internet] {
                     let sandbox = Sandbox::new("agents".into())
                         .code(SandboxCode::Image {
                             image: "us-central1-docker.pkg.dev/p/r/agents:1".into(),

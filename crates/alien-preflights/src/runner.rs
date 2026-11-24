@@ -1853,10 +1853,6 @@ mod setup_update_authorization_tests {
                 SandboxEgress::None,
                 Some(alien_core::InitialSetupAuthority::DirectSetup),
             ),
-            (
-                SandboxEgress::Allow,
-                Some(alien_core::InitialSetupAuthority::DirectSetup),
-            ),
         ] {
             if let Err(error) = runner
                 .run_deployment_time_preflights(

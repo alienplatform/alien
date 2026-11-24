@@ -17,10 +17,6 @@ async fn every_provider_refuses_requested_policy_without_a_gateway_before_io() {
     for bound in [
         SandboxEgress::Internet,
         SandboxEgress::None,
-        SandboxEgress::Allow,
-        SandboxEgress::AllowDomains {
-            domains: vec!["example.com".into()],
-        },
     ] {
         let token = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(token.path(), "test-token").unwrap();
@@ -138,7 +134,7 @@ async fn gcp_names_the_missing_gateway_for_every_runtime_policy() {
         "template".to_string(),
         None,
     )
-    .with_egress(Some(SandboxEgress::Allow));
+    .with_egress(Some(SandboxEgress::None));
     assert_eq!(
         undeclared
             .update_egress("existing", EgressPolicy::Internet)

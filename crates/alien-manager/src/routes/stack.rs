@@ -2741,7 +2741,7 @@ mod setup_update_authorization_tests {
                         image: "example.com/agents:latest".to_string(),
                         bundled_from: None,
                     })
-                    .egress(alien_core::SandboxEgress::Allow)
+                    .egress(alien_core::SandboxEgress::None)
                     .lifecycle(alien_core::SandboxLifecyclePolicy {
                         max_lifetime_seconds: None,
                         idle_pause_seconds: None,

@@ -158,7 +158,13 @@ impl CompileTimeCheck for SandboxPlatformSupportCheck {
                     // A capability refusal names the platform and the capability, which is the
                     // right shape for the runtime caller but leaves a deployer with several
                     // sandboxes unable to tell which declaration to change.
-                    .map(|error| format!("Sandbox '{}': {error}", sandbox.id()))
+                    .map(|error| match error.error {
+                        // This message already names the sandbox.
+                        Some(alien_core::ErrorData::SandboxEgressModeRemoved { .. }) => {
+                            error.message
+                        }
+                        _ => format!("Sandbox '{}': {error}", sandbox.id()),
+                    })
             })
             .collect();
 
@@ -178,36 +184,11 @@ impl CompileTimeCheck for SandboxPlatformSupportCheck {
                 )
             })
             .collect::<Vec<_>>();
-        // `allow` and `allowDomains` keep their released meaning on Google Cloud: open outbound
-        // through Google's own network. Only `internet` uses the deployment's egress gateway, so
-        // the hint to use it is given only once `internet` is available.
         let gcp_internet = alien_core::gcp_sandbox_gateway::internet_egress_available_for(stack);
-        warnings.extend(
-            stack
-                .resources()
-                .filter_map(|(_, entry)| entry.config.downcast_ref::<Sandbox>())
-                .filter(|sandbox| {
-                    gcp_internet
-                        && platform == Platform::Gcp
-                        && matches!(
-                            sandbox.egress,
-                            SandboxEgress::Allow | SandboxEgress::AllowDomains { .. }
-                        )
-                })
-                .map(|sandbox| {
-                    format!(
-                        "Sandbox '{}': egress `allow` on Google Cloud is open outbound and has no \
-                         per-sandbox rules. Use `internet` for the deployment's egress gateway, \
-                         host and port rules and live `update_egress`; it needs a project that \
-                         has never run a sandbox without the deployment network.",
-                        sandbox.id()
-                    )
-                }),
-        );
         // A project's first sandbox template fixes its network placement for good. A sandbox on
-        // Google's default network (`none`, `allow`) therefore keeps the project from ever
+        // Google's default network (`none`) therefore keeps the project from ever
         // hosting a gateway-backed `internet` sandbox, and deleting every sandbox does not undo it.
-        // Like the hint above, this is said only once `internet` is available to switch to.
+        // This is said only once `internet` is available to switch to.
         warnings.extend(
             stack
                 .resources()
@@ -457,14 +438,7 @@ mod tests {
 
     #[tokio::test]
     async fn root_boot_requires_an_aws_connector_including_legacy_direct_modes() {
-        for policy in [
-            SandboxEgress::Allow,
-            SandboxEgress::None,
-            SandboxEgress::AllowDomains {
-                domains: vec!["example.com".into()],
-            },
-            SandboxEgress::Internet,
-        ] {
+        for policy in [SandboxEgress::None, SandboxEgress::Internet] {
             for legacy in [false, true] {
                 let mut value = sandbox("root-boot", None, policy.clone());
                 value.image_user = Some(0);
@@ -477,23 +451,15 @@ mod tests {
                     .check(&stack, Platform::Aws)
                     .await
                     .unwrap();
-                let requires_refusal =
-                    policy == SandboxEgress::Allow || (legacy && policy != SandboxEgress::Internet);
+                let requires_refusal = legacy && policy != SandboxEgress::Internet;
                 if requires_refusal {
                     assert!(!result.success);
                     assert!(result
                         .errors
                         .join(" ")
                         .contains("root image USER requires an AWS egress connector"));
-                } else if matches!(policy, SandboxEgress::None | SandboxEgress::Internet) {
-                    assert!(result.success, "{:?}", result.errors);
                 } else {
-                    assert!(!result.success);
-                    assert!(
-                        result.errors.join(" ").contains("domainEgressRules"),
-                        "{:?}",
-                        result.errors
-                    );
+                    assert!(result.success, "{:?}", result.errors);
                 }
             }
         }
@@ -538,7 +504,7 @@ mod tests {
         );
         // Released artifacts retain their old boot contract; non-root new images need no root boundary.
         for user in [None, Some(2001)] {
-            let mut value = sandbox("old-or-nonroot", None, SandboxEgress::Allow);
+            let mut value = sandbox("old-or-nonroot", None, SandboxEgress::None);
             value.image_user = user;
             assert!(
                 SandboxPlatformSupportCheck
@@ -553,7 +519,7 @@ mod tests {
     #[tokio::test]
     async fn local_refuses_root_boot_until_exec_is_separated() {
         for user in [None, Some(0), Some(2001)] {
-            let mut value = sandbox("boot", None, SandboxEgress::Allow);
+            let mut value = sandbox("boot", None, SandboxEgress::None);
             value.image_user = user;
             let result = SandboxPlatformSupportCheck
                 .check(&stack_with(value), Platform::Local)
@@ -581,11 +547,7 @@ mod tests {
     /// names the declaration, and non-root images are unaffected by egress mode.
     #[tokio::test]
     async fn kubernetes_root_boot_needs_internet_or_none_egress() {
-        for (egress, root_ok) in [
-            (SandboxEgress::Internet, true),
-            (SandboxEgress::None, true),
-            (SandboxEgress::Allow, false),
-        ] {
+        for (egress, root_ok) in [(SandboxEgress::Internet, true), (SandboxEgress::None, true)] {
             for user in [None, Some(0), Some(2001)] {
                 let mut value = sandbox("boot", None, egress.clone());
                 value.image_user = user;
@@ -681,7 +643,7 @@ mod tests {
                 .unwrap();
             assert!(result.success, "{platform}: {:?}", result.errors);
         }
-        for egress in [SandboxEgress::None, SandboxEgress::Allow] {
+        for egress in [SandboxEgress::None] {
             let result = SandboxPlatformSupportCheck
                 .check(&internet("agent", egress), Platform::Azure)
                 .await
@@ -767,7 +729,7 @@ mod tests {
     #[tokio::test]
     async fn a_frozen_aws_sandbox_from_a_private_registry_must_be_live() {
         let with_image = |image: &str| {
-            let mut sandbox = sandbox("agents", None, SandboxEgress::Allow);
+            let mut sandbox = sandbox("agents", None, SandboxEgress::None);
             sandbox.code = SandboxCode::Image {
                 image: image.to_string(),
                 bundled_from: None,
@@ -805,57 +767,41 @@ mod tests {
         }
     }
 
-    /// While the switch is off, `allow` on Google Cloud gets no hint to move to `internet`.
+    /// A stored removed egress mode is refused on every platform, with `internet` named as the
+    /// replacement.
     #[tokio::test]
-    async fn gcp_allow_gets_no_internet_hint_while_the_switch_is_off() {
-        let stack = stack_with(sandbox("agents", None, SandboxEgress::Allow));
-        let result = SandboxPlatformSupportCheck
-            .check(&stack, Platform::Gcp)
-            .await
-            .unwrap();
-        assert!(result.success, "{:?}", result.errors);
-        assert!(
-            result.warnings.iter().all(|w| !w.contains("open outbound")),
-            "{:?}",
-            result.warnings
-        );
-    }
-
-    #[tokio::test]
-    async fn gcp_allow_warns_that_it_is_open_outbound_and_internet_does_not() {
-        let _on = alien_core::gcp_sandbox_gateway::enable_internet_egress_for_test();
-        for (egress, warns) in [
-            (SandboxEgress::Allow, true),
-            (
-                SandboxEgress::AllowDomains {
-                    domains: vec!["example.com".into()],
-                },
-                true,
-            ),
-            (SandboxEgress::None, false),
+    async fn a_removed_egress_mode_is_refused_naming_the_replacement() {
+        for removed in [
+            alien_core::RemovedSandboxEgress::Allow,
+            alien_core::RemovedSandboxEgress::AllowDomains {
+                domains: vec!["example.com".into()],
+            },
         ] {
-            let stack = stack_with(sandbox("agents", None, egress.clone()));
-            let result = SandboxPlatformSupportCheck
-                .check(&stack, Platform::Gcp)
-                .await
-                .unwrap();
-            let named = result
-                .warnings
-                .iter()
-                .any(|w| w.contains("open outbound") && w.contains("'agents'"));
-            assert_eq!(named, warns, "{egress:?}: {:?}", result.warnings);
+            for platform in [
+                Platform::Aws,
+                Platform::Gcp,
+                Platform::Azure,
+                Platform::Local,
+            ] {
+                let egress = SandboxEgress::Removed(removed.clone());
+                let result = SandboxPlatformSupportCheck
+                    .check(&stack_with(sandbox("agents", None, egress)), platform)
+                    .await
+                    .unwrap();
+                assert!(!result.success, "{removed:?} {platform:?}");
+                let errors = result.errors.join(" ");
+                assert!(
+                    errors.contains("was removed")
+                        && errors.contains("internet")
+                        && errors.contains("'agents'"),
+                    "{removed:?} {platform:?}: {errors}"
+                );
+            }
         }
-        // The same declaration is not called open outbound on a platform where it is not.
-        let stack = stack_with(sandbox("agents", None, SandboxEgress::Allow));
-        let result = SandboxPlatformSupportCheck
-            .check(&stack, Platform::Aws)
-            .await
-            .unwrap();
-        assert!(result.warnings.iter().all(|w| !w.contains("open outbound")));
     }
 
     /// The one switch: with it off, Google Cloud `internet` is refused with exactly the message,
-    /// by the check that build, release and the package render all run; `none` and `allow` are
+    /// by the check that build, release and the package render all run; `none` is
     /// not affected. With it on, the same stack passes.
     #[tokio::test]
     async fn gcp_internet_is_refused_until_the_switch_flips() {
@@ -872,7 +818,7 @@ mod tests {
                 alien_core::gcp_sandbox_gateway::INTERNET_SANDBOX_UNAVAILABLE
             )]
         );
-        for egress in [SandboxEgress::None, SandboxEgress::Allow] {
+        for egress in [SandboxEgress::None] {
             let result = SandboxPlatformSupportCheck
                 .check(&stack_with(sandbox("agent", None, egress)), Platform::Gcp)
                 .await
@@ -994,7 +940,7 @@ mod tests {
     /// instead. While it is not available there is nothing to switch to, so nothing is said.
     #[tokio::test]
     async fn a_gcp_default_network_sandbox_is_told_its_project_cannot_switch_later() {
-        for egress in [SandboxEgress::None, SandboxEgress::Allow] {
+        for egress in [SandboxEgress::None] {
             let result = SandboxPlatformSupportCheck
                 .check(
                     &stack_with(sandbox("agent", None, egress.clone())),
@@ -1007,7 +953,7 @@ mod tests {
         }
 
         let _on = alien_core::gcp_sandbox_gateway::enable_internet_egress_for_test();
-        for egress in [SandboxEgress::None, SandboxEgress::Allow] {
+        for egress in [SandboxEgress::None] {
             let result = SandboxPlatformSupportCheck
                 .check(&stack_with(sandbox("agent", None, egress)), Platform::Gcp)
                 .await

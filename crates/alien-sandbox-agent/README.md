@@ -33,7 +33,7 @@ builder cannot represent that repeated layer correctly.
 New builds inspect prebuilt OCI references as well as Dockerfile outputs. GCP and
 Azure bases then use the normal agent assembler; Local keeps an immutable Docker
 image ID. The resolved original USER drives planning, including explicit root refusal on
-Local, root refusal on Kubernetes with `allow` egress, and root refusal on AWS modes without a connector. Images without
+Local, and root refusal on AWS modes without a connector. Images without
 USER retain the released Local/Kubernetes behavior: non-root uid 65534 and no new
 image boot contract. AWS images without USER also retain their released non-root
 contract when no connector is present (including unrestricted egress). With an AWS
@@ -117,19 +117,10 @@ always removes `NET_ADMIN`; it retains the common root set so a supervisor can
 start workers under other uids. Backends without guest network rules need only
 the common root set. It clears ambient and inheritable capabilities and sets
 `no_new_privs`. Missing required capabilities fail startup. Seccomp installation after
-`no_new_privs` needs no extra capability. The legacy `allowDomains` mode also uses
-`SYS_ADMIN` during bootstrap to replace AWS's read-only `/etc/hosts` mount; that
-capability is removed before worker threads or guest code start. Legacy image
+`no_new_privs` needs no extra capability. Legacy image
 commands, exec, and detached jobs receive zero capabilities in all five sets.
 
-`deny` grants commands no routed egress or DNS. `allowDomains` resolves the declared
-names before starting commands, pins public IPv4 addresses in `/etc/hosts`, and
-permits traffic only to those addresses. Commands cannot send DNS queries, including
-to a loopback resolver. AWS snapshots these addresses into the image version. Rebuild and redeploy the
-image to refresh them; restarting or resuming a session retains the pinned addresses. This is an IP allowlist: other hostnames or services sharing an
-allowed IP are reachable. Wildcards and IPv6-only destinations are unsupported.
-`allow` permits public IPv4 egress and the configured DNS resolvers, while denying
-private/link-local destinations. Loopback services and replies to inbound agent or
+`deny` grants commands no routed egress or DNS. Loopback services and replies to inbound agent or
 preview connections remain available in every policy.
 
 Remote raw cloud grants are refused for this mode: their holders could select a
@@ -304,8 +295,7 @@ command-identity/egress behavior; rebuilding adopts the new image contract.
 ## Kubernetes root boot
 
 A root image (`USER 0`) runs on Kubernetes when egress is `internet` or `none` and the
-RuntimeClass is a verified sandboxed one. `allow` and `allowDomains` are refused at plan time:
-nothing outside the pod enforces them. Non-root images behave exactly as before.
+RuntimeClass is a verified sandboxed one. Non-root images behave exactly as before.
 
 The pod runs the agent as uid 0 with `drop: [ALL]` plus the boot set that AWS uses
 (`IMAGE_ROOT_CAPABILITY_SET` in `alien-core`; never NET_ADMIN, SYS_ADMIN or NET_RAW), seccomp

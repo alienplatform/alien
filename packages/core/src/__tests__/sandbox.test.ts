@@ -135,12 +135,8 @@ describe("Sandbox", () => {
   })
 })
 
-it("preserves deprecated declarations and supervisor settings without gateway migration", () => {
-  const policies: SandboxEgress[] = [
-    { mode: "deny" },
-    { mode: "allow" },
-    { mode: "allowDomains", domains: ["api.example.com"] },
-  ]
+it("preserves the deprecated deny declaration and supervisor settings without gateway migration", () => {
+  const policies: SandboxEgress[] = [{ mode: "deny" }]
   for (const egress of policies) {
     const config = SandboxConfigSchema.parse({
       ...complete().egress(egress).build().config,
@@ -149,5 +145,16 @@ it("preserves deprecated declarations and supervisor settings without gateway mi
     expect(config.egress).toEqual(egress)
     expect(config.privilegedSupervisor).toEqual({ commandUid: 60000 })
     expect(config.defaultPolicy).toBeUndefined()
+  }
+})
+
+it("refuses the removed egress modes", () => {
+  for (const egress of [
+    { mode: "allow" },
+    { mode: "allowDomains", domains: ["api.example.com"] },
+  ]) {
+    expect(SandboxConfigSchema.safeParse({ ...complete().build().config, egress }).success).toBe(
+      false,
+    )
   }
 })

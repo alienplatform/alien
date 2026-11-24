@@ -8,7 +8,7 @@
 
 use crate::error::Result;
 use crate::{CheckResult, CompileTimeCheck};
-use alien_core::{NetworkSettings, Platform, ResourceEntry, Sandbox, SandboxEgress, Stack};
+use alien_core::{CloudEgressRoute, NetworkSettings, Platform, ResourceEntry, Sandbox, Stack};
 
 /// Resource types that require VPC networking on cloud platforms.
 ///
@@ -42,13 +42,13 @@ pub(crate) fn resource_requires_network(stack: &Stack, entry: &ResourceEntry) ->
             .is_some_and(|descriptor| descriptor.requires_network)
 }
 
-/// Gateway-backed and restricted sandboxes need connector subnets.
-/// Legacy Allow retains its direct route and does not require a network.
+/// Gateway-backed and closed sandboxes need connector subnets.
+/// A released privileged supervisor keeps its direct route and does not require a network.
 fn sandbox_requires_connector(entry: &ResourceEntry) -> bool {
     entry
         .config
         .downcast_ref::<Sandbox>()
-        .is_some_and(|sandbox| !matches!(sandbox.cloud_egress(), SandboxEgress::Allow))
+        .is_some_and(|sandbox| sandbox.cloud_route() != CloudEgressRoute::Direct)
 }
 
 /// Ensures public subnets are configured when resources need public ingress.
@@ -266,7 +266,7 @@ mod tests {
     use alien_core::{
         permissions::PermissionsConfig, CapacityGroup, ComputeCluster, Container, ContainerCode,
         Network, NetworkSettings, ResourceEntry, ResourceLifecycle, ResourceSpec, SandboxCode,
-        SandboxLifecyclePolicy, Worker, WorkerCode, WorkerPublicEndpoint,
+        SandboxEgress, SandboxLifecyclePolicy, Worker, WorkerCode, WorkerPublicEndpoint,
     };
     use indexmap::IndexMap;
 
@@ -482,17 +482,7 @@ mod tests {
 
     #[test]
     fn a_sandbox_requires_a_network_when_its_egress_needs_a_connector() {
-        for (egress, expected) in [
-            (SandboxEgress::None, true),
-            (SandboxEgress::Internet, true),
-            (SandboxEgress::Allow, false),
-            (
-                SandboxEgress::AllowDomains {
-                    domains: vec!["api.example.com".into()],
-                },
-                true,
-            ),
-        ] {
+        for (egress, expected) in [(SandboxEgress::None, true), (SandboxEgress::Internet, true)] {
             for supervisor in [false, true] {
                 let mut entry = create_sandbox_entry(egress.clone());
                 if supervisor {

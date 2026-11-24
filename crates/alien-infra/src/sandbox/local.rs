@@ -389,14 +389,13 @@ fn session_template(
 
     let egress = match &sandbox.egress {
         SandboxEgress::None => alien_local::SandboxEgressMode::Deny,
-        SandboxEgress::Allow | SandboxEgress::Internet => alien_local::SandboxEgressMode::Allow,
-        SandboxEgress::AllowDomains { .. } => {
-            return Err(AlienError::new(ErrorData::CloudPlatformError {
-                message: "a local sandbox has one network switch and no filter, so a hostname \
-                          list has nothing to render into; Azure matches on host pattern"
-                    .to_string(),
+        SandboxEgress::Internet => alien_local::SandboxEgressMode::Allow,
+        SandboxEgress::Removed(_) => {
+            let removed = sandbox.ensure_egress_supported().err();
+            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: removed.map(|error| error.message).unwrap_or_default(),
                 resource_id: Some(sandbox.id.clone()),
-            }))
+            }));
         }
     };
 

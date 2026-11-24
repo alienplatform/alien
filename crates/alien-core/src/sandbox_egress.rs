@@ -169,6 +169,16 @@ fn first_internet_sandbox(stack: &Stack) -> Option<&String> {
         .map(|(id, _)| id)
 }
 
+/// Refuses a stack declaring a removed sandbox egress mode, naming the sandbox and the
+/// replacement. A stack that carries one only because an earlier release wrote it is read as it
+/// is; this is the check for stacks being built, released or applied.
+pub fn refuse_removed_sandbox_egress(stack: &Stack) -> crate::Result<()> {
+    stack
+        .resources()
+        .filter_map(|(_, entry)| entry.config.downcast_ref::<Sandbox>())
+        .try_for_each(Sandbox::ensure_egress_supported)
+}
+
 /// Whether the stack has a Sandbox with internet egress.
 pub fn has_internet_sandbox(stack: &Stack) -> bool {
     first_internet_sandbox(stack).is_some()
@@ -239,10 +249,7 @@ pub fn sandbox_needs_connector(stack: &Stack, sandbox: &Sandbox) -> bool {
 /// Build and compile-time checks run before the managed internet gateway is added.
 /// Deployment prerequisites still refuse a target that cannot host that gateway.
 pub fn sandbox_plans_connector(sandbox: &Sandbox) -> bool {
-    matches!(
-        sandbox.cloud_egress(),
-        SandboxEgress::None | SandboxEgress::AllowDomains { .. }
-    ) || sandbox.egress == SandboxEgress::Internet
+    sandbox.cloud_route() != crate::CloudEgressRoute::Direct
 }
 
 /// Inspected builds opt into OCI USER startup after Run. Saved declarations without

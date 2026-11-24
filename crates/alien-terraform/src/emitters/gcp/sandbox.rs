@@ -1,8 +1,7 @@
 //! GCP Agent Platform sandbox emitter.
 //!
-//! The template is release-owned, so setup emits only engine-scoped grants: the remote grant and,
-//! on a Frozen sandbox, the manager's template verbs. Domain-scoped egress is refused here, since
-//! the single internet-access switch cannot express a hostname list.
+//! The template is release-owned, so setup emits only engine-scoped grants: on a Frozen sandbox,
+//! the manager's template verbs.
 
 use crate::{
     block::{attr, block, nested, resource_block},
@@ -32,23 +31,6 @@ use hcl::expr::Expression;
 /// the engine and template are addressed by. Kept together so the binding this emits is the one
 /// the provider deserializes.
 const AGENT_PLATFORM_SERVICE: &str = "sandbox-gcp-agent-platform";
-
-/// Refuses domain-scoped egress, which Agent Platform's single internet-access switch cannot carry.
-///
-/// The switch semantics live in `SandboxEgress::internet_access_switch`, so this and the provider's
-/// template mapping cannot drift on which modes are expressible. Names the sandbox and both
-/// accepted modes.
-fn refuse_domain_egress(sandbox: &Sandbox) -> Result<()> {
-    if sandbox.egress.internet_access_switch().is_some() {
-        return Ok(());
-    }
-    Err(AlienError::new(ErrorData::OperationNotSupported {
-        operation: format!("terraform emit sandbox '{}'", sandbox.id()),
-        reason: "Agent Platform egress is a single internet-access switch, so a hostname list has \
-                 nothing to render into. Declare egress: deny or egress: allow"
-            .to_string(),
-    }))
-}
 
 /// Terraform label of the engine this sandbox's sessions hang under.
 fn engine_label<'a>(ctx: &'a EmitContext<'_>) -> Result<&'a str> {
@@ -104,12 +86,9 @@ fn agent_platform_fields(
             expr::template(format!("{engine}/sandboxEnvironmentTemplates/{label}")),
         ),
         ("region", expr::raw("var.gcp_region")),
-        (
-            "allowEgress",
-            // The switch the serving template carries. `internet` goes through the gateway path and
-            // keeps the switch closed; the controller reports the same.
-            Expression::Bool(matches!(sandbox.egress, SandboxEgress::Allow)),
-        ),
+        // Every template this version creates has its own internet switch closed: `internet`
+        // leaves only through the gateway.
+        ("allowEgress", Expression::Bool(false)),
     ];
     if let Some(seconds) = sandbox.lifecycle.max_lifetime_seconds {
         fields.push((
@@ -142,7 +121,6 @@ impl TfEmitter for GcpAgentPlatformSandboxEmitter {
         // The environment template is release-owned: a new image replaces it, so it belongs to the
         // controller under either lifecycle. Only its engine is ever a setup resource.
         let mut fragment = TfFragment::default();
-        emit_remote_access(ctx, &mut fragment)?;
         emit_template_management(ctx, &mut fragment)?;
         emit_preview_signer(ctx, &mut fragment)?;
         Ok(fragment)
@@ -150,7 +128,7 @@ impl TfEmitter for GcpAgentPlatformSandboxEmitter {
 
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<Expression> {
         let sandbox = downcast::<Sandbox>(ctx, Sandbox::RESOURCE_TYPE)?;
-        refuse_domain_egress(sandbox)?;
+        sandbox.ensure_egress_supported()?;
         // The engine id is not here: it is server-assigned, and the engine registers its own.
         let mut fields = vec![("region", expr::raw("var.gcp_region"))];
         // The template controller builds the binding a workload reads, so the signing identity
@@ -171,7 +149,7 @@ impl TfEmitter for GcpAgentPlatformSandboxEmitter {
     fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<Expression>> {
         let label = required_label(ctx)?;
         let sandbox = downcast::<Sandbox>(ctx, Sandbox::RESOURCE_TYPE)?;
-        refuse_domain_egress(sandbox)?;
+        sandbox.ensure_egress_supported()?;
         let mut fields = agent_platform_fields(ctx, sandbox, label)?;
         if has_preview_signer(ctx, sandbox) {
             fields.push((
@@ -199,36 +177,6 @@ impl TfEmitter for GcpAgentPlatformSandboxEmitter {
 
         Ok(Some(expr::object(fields)))
     }
-}
-
-/// Attaches this sandbox's remote grant to the stack's shared Remote Bindings identity, scoped to
-/// the engine and nothing wider: engine IAM covers only the sessions under it, while GCP's only
-/// wider scope is the whole project — every sibling sandbox in the deployment.
-fn emit_remote_access(ctx: &EmitContext<'_>, fragment: &mut TfFragment) -> Result<()> {
-    let (Some(definition), Some(access_label)) = (
-        alien_core::remote_bindings::remote_binding_is_deliverable(ctx.resource)
-            .then(|| alien_core::remote_bindings::remote_binding_for_entry(ctx.resource))
-            .flatten(),
-        remote_bindings_label(ctx),
-    ) else {
-        return Ok(());
-    };
-    if ctx.resource.lifecycle != ResourceLifecycle::Frozen {
-        return Err(AlienError::new(ErrorData::OperationNotSupported {
-            operation: format!("terraform publish sandbox '{}' remotely", ctx.resource_id),
-            reason: "GCP refuses an IAM binding on a reasoning engine that does not exist yet, \
-                     and a Live engine is created by its controller after apply. Declare the \
-                     sandbox as frozen"
-                .to_string(),
-        }));
-    }
-    emit_engine_grant(
-        ctx,
-        fragment,
-        definition.permission_set,
-        access_label,
-        "access",
-    )
 }
 
 /// Whether the stack grants its management identity `sandbox/templates` on this Frozen sandbox,
@@ -679,14 +627,6 @@ fn execute_owner_labels(ctx: &EmitContext<'_>) -> Vec<String> {
     owners
 }
 
-fn remote_bindings_label<'a>(ctx: &'a EmitContext<'_>) -> Option<&'a str> {
-    ctx.stack.resources().find_map(|(id, entry)| {
-        (entry.config.resource_type() == RemoteBindings::RESOURCE_TYPE)
-            .then(|| ctx.name_for(id))
-            .flatten()
-    })
-}
-
 #[cfg(test)]
 mod tests {
     mod agent_platform {
@@ -795,57 +735,6 @@ mod tests {
         fn attribute(block: &hcl::structure::Block, key: &str) -> String {
             attribute_opt(block, key)
                 .unwrap_or_else(|| panic!("the block carries no '{key}': {block:?}"))
-        }
-
-        /// The grant names the engine by reading the created block's server-assigned `name` — a
-        /// name derived from the setup label would be a scope no engine answers to, so the caller
-        /// would hold no session access at all while `PERMISSIONS.md` still advertised the grant.
-        #[test]
-        fn the_engine_grant_references_the_created_engine() {
-            let stack = stack_with(SandboxEgress::Allow, None, ResourceLifecycle::Frozen, true);
-            let fragment = with_context(&stack, |ctx| {
-                GcpAgentPlatformSandboxEmitter
-                    .emit(ctx)
-                    .expect("a frozen remote sandbox renders its grant")
-            });
-
-            let member = fragment
-                .resource_blocks
-                .iter()
-                .find(|block| {
-                    block.labels.first().map(|label| label.as_str())
-                        == Some("google_vertex_ai_reasoning_engine_iam_member")
-                })
-                .expect("the remote grant renders an engine-scoped IAM member");
-            assert_eq!(
-                attribute(member, "reasoning_engine"),
-                format!("{ENGINE_RESOURCE}.agents_engine.name")
-            );
-            assert_eq!(attribute(member, "provider"), "google-beta");
-            assert_eq!(
-                attribute(member, "member"),
-                "\"serviceAccount:${google_service_account.access.email}\""
-            );
-            // The role is the generated custom one, not a predefined role: every predefined role
-            // carrying the execute verb carries the rest of Vertex AI with it.
-            assert!(
-                attribute(member, "role").contains("google_project_iam_custom_role"),
-                "{member:?}"
-            );
-
-            // A sandbox nobody published gets no engine grant, whatever else the stack declares.
-            let unpublished =
-                stack_with(SandboxEgress::Allow, None, ResourceLifecycle::Frozen, false);
-            let fragment = with_context(&unpublished, |ctx| {
-                GcpAgentPlatformSandboxEmitter.emit(ctx).expect("renders")
-            });
-            assert!(
-                !fragment.resource_blocks.iter().any(|block| {
-                    block.labels.first().map(|l| l.as_str())
-                        == Some("google_vertex_ai_reasoning_engine_iam_member")
-                }),
-                "{fragment:?}"
-            );
         }
 
         /// The engine grant follows the profile: one member when `sandbox/templates` is granted on
@@ -1038,7 +927,7 @@ mod tests {
                         image: "ubuntu".to_string(),
                         bundled_from: None,
                     })
-                    .egress(SandboxEgress::Allow)
+                    .egress(SandboxEgress::None)
                     .lifecycle(SandboxLifecyclePolicy {
                         max_lifetime_seconds: None,
                         idle_pause_seconds: None,
@@ -1182,7 +1071,7 @@ mod tests {
                         image: "ubuntu".to_string(),
                         bundled_from: None,
                     })
-                    .egress(SandboxEgress::Allow)
+                    .egress(SandboxEgress::None)
                     .lifecycle(SandboxLifecyclePolicy {
                         max_lifetime_seconds: None,
                         idle_pause_seconds: None,
@@ -1321,7 +1210,7 @@ mod tests {
                     image: "ubuntu".to_string(),
                     bundled_from: None,
                 })
-                .egress(SandboxEgress::Allow)
+                .egress(SandboxEgress::None)
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: None,
@@ -1436,7 +1325,10 @@ mod tests {
                     );
                 let builder = if remote_access {
                     builder.add_with_remote_access(
-                        base.egress(SandboxEgress::Allow).build(),
+                        base.egress(SandboxEgress::Removed(
+                            alien_core::RemovedSandboxEgress::Allow,
+                        ))
+                        .build(),
                         ResourceLifecycle::Frozen,
                     )
                 } else {
@@ -1533,24 +1425,6 @@ mod tests {
             );
         }
 
-        /// GCP refuses an IAM binding whose engine does not exist yet, and a Live engine is created
-        /// by its controller after apply. Emitting the member anyway would reference a block this
-        /// template never renders.
-        #[test]
-        fn a_live_remote_sandbox_is_refused_naming_the_lifecycle() {
-            let stack = stack_with(SandboxEgress::Allow, None, ResourceLifecycle::Live, true);
-            let error = with_context(&stack, |ctx| {
-                GcpAgentPlatformSandboxEmitter
-                    .emit(ctx)
-                    .expect_err("a Live engine has no scope a grant can name")
-            });
-
-            assert_eq!(error.code, "OPERATION_NOT_SUPPORTED", "{error}");
-            let rendered = error.to_string();
-            assert!(rendered.contains("agents"), "names the sandbox: {rendered}");
-            assert!(rendered.contains("frozen"), "names the fix: {rendered}");
-        }
-
         /// An `internet` sandbox answers only through its private endpoint, to the edge credential
         /// the signing identity signs, so its binding names that identity without preview ports.
         #[test]
@@ -1559,7 +1433,7 @@ mod tests {
                 .expect("the binding renders")
                 .expect("an Agent Platform sandbox has a binding");
             assert!(object_keys(&emitted).contains("previewServiceAccount"));
-            let open = emit_binding(SandboxEgress::Allow, Some(3600))
+            let open = emit_binding(SandboxEgress::None, Some(3600))
                 .expect("the binding renders")
                 .expect("an Agent Platform sandbox has a binding");
             assert!(!object_keys(&open).contains("previewServiceAccount"));
@@ -1570,7 +1444,7 @@ mod tests {
         /// set on both sides so the key sets are comparable whole.
         #[test]
         fn emitted_binding_keys_match_the_binding_type() {
-            let emitted = emit_binding(SandboxEgress::Allow, Some(3600))
+            let emitted = emit_binding(SandboxEgress::None, Some(3600))
                 .expect("the binding renders")
                 .expect("an Agent Platform sandbox has a binding");
 
@@ -1579,7 +1453,6 @@ mod tests {
                 "t",
                 "us-central1",
                 Some(3600),
-                true,
             ))
             .expect("the binding type serializes");
             let type_keys: BTreeSet<String> = type_json
@@ -1594,37 +1467,6 @@ mod tests {
                 type_keys,
                 "emitted keys must track the binding type"
             );
-        }
-
-        /// The binding is where a workload reads whether the sandbox is isolated, so each mode must
-        /// render its own value, not only a key of the right name.
-        #[test]
-        fn allow_egress_renders_the_declared_mode() {
-            for (egress, expected) in [
-                (SandboxEgress::None, false),
-                // `internet` goes through the gateway: the template's own switch stays closed.
-                (SandboxEgress::Internet, false),
-                (SandboxEgress::Allow, true),
-            ] {
-                let emitted = emit_binding(egress.clone(), None)
-                    .expect("the binding renders")
-                    .expect("an Agent Platform sandbox has a binding");
-                let Expression::Object(map) = &emitted else {
-                    panic!("expected an object, got {emitted:?}");
-                };
-                let value = map
-                    .iter()
-                    .find_map(|(key, value)| {
-                        let name = match key {
-                            hcl::expr::ObjectKey::Identifier(id) => id.as_str(),
-                            hcl::expr::ObjectKey::Expression(Expression::String(s)) => s.as_str(),
-                            _ => return None,
-                        };
-                        (name == "allowEgress").then_some(value)
-                    })
-                    .expect("allowEgress is emitted");
-                assert_eq!(value, &Expression::Bool(expected), "{egress:?}");
-            }
         }
 
         /// A declared lifetime reaches the binding under the name the type reads, and an absent

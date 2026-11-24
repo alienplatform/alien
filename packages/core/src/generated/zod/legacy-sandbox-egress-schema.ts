@@ -6,15 +6,10 @@
 import * as z from "zod";
 
 /**
- * @description Deprecated object declarations preserve their released backend behavior.
+ * @description Deprecated object declaration kept for released stacks.
  */
-export const LegacySandboxEgressSchema = z.union([z.object({
+export const LegacySandboxEgressSchema = z.object({
     "mode": z.enum(["deny"])
-    }), z.object({
-    "mode": z.enum(["allow"])
-    }), z.object({
-    "domains": z.array(z.string()),
-"mode": z.enum(["allowDomains"])
-    })]).describe("Deprecated object declarations preserve their released backend behavior.")
+    }).describe("Deprecated object declaration kept for released stacks.")
 
 export type LegacySandboxEgress = z.infer<typeof LegacySandboxEgressSchema>

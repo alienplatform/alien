@@ -226,10 +226,9 @@ Loopback DNAT works on kernels without the optional redirect expression. Every
 image command and exec child receives an irreversible IPv6 socket restriction,
 including on kernels that expose IPv6 sockets without IPv6 nftables support.
 
-Legacy supervisor object policies (`deny`, `allow`, and `allowDomains`) retain
-their released direct path and command-UID filter, including pinned allowlisted
-DNS and command IPv6 restrictions. They require no gateway token. These startup
-rules also use native netlink.
+The legacy supervisor object policy `deny` retains its released direct path and
+command-UID filter, including command IPv6 restrictions. It requires no gateway token.
+These startup rules also use native netlink.
 
 Command-UID replies to external inbound TCP are denied: an incoming connection
 must not become an unchecked outbound channel. Preview access uses the agent's

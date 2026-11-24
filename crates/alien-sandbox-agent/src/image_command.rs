@@ -750,11 +750,7 @@ mod tests {
     fn legacy_egress_refuses_root_image_before_spawn() {
         const CHILD: &str = "ALIEN_TEST_LEGACY_BOOT_CHILD";
         if std::env::var_os(CHILD).is_none() {
-            for mode in [
-                r#"{"mode":"deny"}"#,
-                r#"{"mode":"allow"}"#,
-                r#"{"mode":"allowDomains","domains":["example.com"]}"#,
-            ] {
+            for mode in [r#"{"mode":"deny"}"#] {
                 let output = std::process::Command::new(std::env::current_exe().unwrap())
                     .args([
                         "--exact",

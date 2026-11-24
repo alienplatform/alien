@@ -56,7 +56,7 @@ const builder = new alien.Sandbox("builder")
 
 const mirror = new alien.Sandbox("mirror")
   .code({ type: "image", image: "s3://acme-bundles/mirror/{region}/rootfs.tar" })
-  .egress({ mode: "allowDomains", domains: ["mirror.acme.example"] })
+  .egress({ mode: "deny" })
   .lifecycle({})
   .build()
 

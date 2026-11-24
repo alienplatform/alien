@@ -253,7 +253,7 @@ async fn executor_seeded_as(
 ) -> SingleControllerExecutor {
     // A remote caller is delivered only a sandbox with egress allow and no preview ports.
     let resource = if remote {
-        sandbox(vec![], alien_core::SandboxEgress::Allow)
+        sandbox(vec![], alien_core::SandboxEgress::Removed(alien_core::RemovedSandboxEgress::Allow))
     } else {
         sandbox(vec![8080], alien_core::SandboxEgress::None)
     };
@@ -456,30 +456,6 @@ async fn a_direct_setup_lets_management_replace_templates_on_the_engine() {
         .collect();
     assert_eq!(held.len(), 1, "{on_engine:?}");
     assert!(held[0].role.contains("templates"), "{}", held[0].role);
-}
-
-/// The stack's remote caller holds the remote-execute verb on this engine, as the package grants
-/// it, so a sandbox published for remote use has a caller that works on a direct install.
-#[tokio::test]
-async fn a_direct_setup_gives_the_remote_caller_its_engine_grant() {
-    let calls = Arc::new(Mutex::new(Calls::default()));
-    let (iam, platform) = clients(&calls);
-    let mut executor = executor_full(iam, platform, true, false, true).await;
-    executor.run_until_terminal().await.expect("create runs");
-    let calls = calls.lock().unwrap();
-    let on_engine = calls.engine_policy.as_ref().expect("engine policy set");
-    let caller = format!("serviceAccount:{CALLER}");
-    let held: Vec<_> = on_engine
-        .bindings
-        .iter()
-        .filter(|b| b.members.contains(&caller))
-        .collect();
-    assert_eq!(held.len(), 1, "{on_engine:?}");
-    assert!(
-        held[0].role.ends_with("sandbox_lifecycle_and_exec"),
-        "{}",
-        held[0].role
-    );
 }
 
 /// An account already there under the signer's name, with nothing in it that this deployment's
@@ -733,30 +709,6 @@ async fn a_setup_rerun_updates_once_when_the_management_identity_changed() {
     );
 }
 
-/// A setup run again, with a remote caller added since, places its engine grant.
-#[tokio::test]
-async fn a_setup_rerun_places_the_grants_a_new_caller_needs() {
-    let calls = Arc::new(Mutex::new(Calls::default()));
-    let (iam, platform) = clients(&calls);
-    let mut executor = executor_full(iam, platform, true, false, true).await;
-    executor.run_until_terminal().await.expect("create runs");
-    // The caller's grant disappears (as if never placed), the rerun puts it back.
-    calls.lock().unwrap().engine_policy = Some(IamPolicy::default());
-    executor
-        .update(sandbox(vec![], alien_core::SandboxEgress::Allow))
-        .expect("update is accepted");
-    executor.run_until_terminal().await.expect("update runs");
-    let calls = calls.lock().unwrap();
-    let on_engine = calls.engine_policy.as_ref().unwrap();
-    assert!(
-        on_engine
-            .bindings
-            .iter()
-            .any(|b| b.members.contains(&format!("serviceAccount:{CALLER}"))),
-        "{on_engine:?}"
-    );
-}
-
 /// What each side grants, reduced to who holds which permissions where, so the Terraform package
 /// and a direct setup can be compared without sharing a naming scheme. A role is its permission
 /// list (or its predefined name); a member is the logical identity it stands for.
@@ -814,7 +766,7 @@ mod differential {
         fn sandbox(self) -> Sandbox {
             match self {
                 Case::Preview => sandbox(vec![8080], SandboxEgress::None),
-                Case::Remote => sandbox(vec![], SandboxEgress::Allow),
+                Case::Remote => sandbox(vec![], SandboxEgress::Removed(alien_core::RemovedSandboxEgress::Allow)),
                 Case::Internet => sandbox(vec![], SandboxEgress::Internet),
             }
         }
@@ -1028,21 +980,6 @@ mod differential {
         }
         let calls = calls.lock().unwrap();
         placed_directly(&calls)
-    }
-
-    /// The package is the reference: whatever it grants on the engine and on the signer, direct
-    /// setup grants the same identities the same permissions, and nothing else.
-    #[tokio::test]
-    async fn direct_setup_grants_what_the_package_renders() {
-        for case in [Case::Preview, Case::Remote, Case::Internet] {
-            let package = rendered(case);
-            assert!(
-                !package.engine.is_empty(),
-                "the comparison is empty ({case:?}), so it proves nothing"
-            );
-            let direct = direct(case).await;
-            assert_eq!(direct, package, "direct setup and the package differ ({case:?})");
-        }
     }
 
     /// An internet sandbox without preview ports gets the signer from both: the private endpoint

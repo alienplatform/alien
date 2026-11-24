@@ -265,7 +265,9 @@ fn binding_sandbox(
         Arc::new(client),
         binding.sandbox_group.clone(),
         binding.disk_image.clone(),
-        alien_core::SandboxEgress::Allow,
+        // No remote sandbox binding resolves any more, so this is not reached; closed is the
+        // only value that could not open a sandbox if it were.
+        alien_core::SandboxEgress::None,
         binding.idle_pause_seconds,
         binding.cpu.clone().unwrap_or_else(|| {
             alien_azure_clients::azure::sandbox_data_plane::DEFAULT_CPU.to_string()

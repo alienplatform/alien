@@ -16,22 +16,12 @@
 use crate::emitter::{HelmEmitter, HelmFragment};
 use alien_core::sandbox_image::AGENT_PORT;
 use alien_core::{
-    import::EmitContext, non_public_ipv4_ranges, ErrorData, ResourceRef, Result, Sandbox,
-    SandboxEgress, Stack,
+    import::EmitContext, ErrorData, ResourceRef, Result, Sandbox, SandboxEgress, Stack,
 };
 use alien_error::AlienError;
 
 /// Label the operator puts on every pod backing a session, and what the policy selects on.
 const LABEL_SANDBOX: &str = "alien.dev/sandbox";
-
-/// Reads `sandbox.clusterDNS` for an allow-egress policy and stops the render when it is missing,
-/// so an upgrade that would leave sandboxes with no name resolution never applies and the running
-/// release keeps its policy.
-const CLUSTER_DNS_VALUES: &str = r#"{{- $dns := dig "clusterDNS" (list) (default dict .Values.sandbox) -}}
-{{- if not $dns -}}
-{{- fail "sandbox.clusterDNS is not set. A sandbox with allow egress needs the address of the cluster DNS service (the nameserver in a pod's /etc/resolv.conf). Find it with: kubectl run dns-probe --rm -i --restart=Never --image=busybox -- grep nameserver /etc/resolv.conf and set sandbox.clusterDNS=[<that address>]." -}}
-{{- end -}}
-"#;
 
 /// Path the broker's RBAC lands at. Fixed rather than per-sandbox: the ClusterRole is one per
 /// deployment, so a second sandbox rewrites the same file instead of colliding on the name.
@@ -288,7 +278,6 @@ fn network_policy(sandbox: &Sandbox, stack: &Stack) -> Result<String> {
             )
         })
         .collect();
-    let mut dns_values = String::new();
     let egress = match sandbox.egress {
         SandboxEgress::None => String::new(),
         // Select the Service's backing pods in this namespace and release. Kubernetes
@@ -309,36 +298,14 @@ fn network_policy(sandbox: &Sandbox, stack: &Stack) -> Result<String> {
           port: 3128
 "#
         .to_string(),
-        SandboxEgress::AllowDomains { .. } => {
-            return Err(AlienError::new(ErrorData::OperationNotSupported {
-                operation: format!("generate the Helm chart for sandbox '{}'", sandbox.id),
-                reason: "a Kubernetes NetworkPolicy matches addresses, not hostnames".to_string(),
-            }));
-        }
-        SandboxEgress::Allow => {
-            // Every range the egress gateway refuses as non-public: private, shared (100.64/10),
-            // loopback, all of link-local (instance metadata, ECS and EKS Pod Identity
-            // credentials), Azure's wire server, and reserved and multicast space. No rule names
-            // an IPv6 block, so no IPv6 destination is reachable.
-            let excepts: String = non_public_ipv4_ranges()
-                .map(|range| format!("            - {range}\n"))
-                .collect();
-            // DNS goes to two places, port 53 only. A CNI that checks policy after the Service
-            // address is translated (kindnet, Calico, Cilium) sees the DNS pod's address, so the
-            // kube-dns pods are admitted by selector. A resolver that is no pod (EKS Auto Mode's
-            // service address, a node-local cache) is admitted by the address in
-            // `sandbox.clusterDNS`, which Helm cannot look up under Argo CD. Port 53 to any other
-            // private host, and every other port on these, stays refused.
-            dns_values = CLUSTER_DNS_VALUES.to_string();
-            let dns = "    - to:\n        - namespaceSelector:\n            matchLabels:\n              kubernetes.io/metadata.name: kube-system\n          podSelector:\n            matchLabels:\n              k8s-app: kube-dns\n{{- range $dns }}\n        - ipBlock:\n            cidr: {{ printf \"%s/32\" . }}\n{{- end }}\n      ports:\n        - protocol: UDP\n          port: 53\n        - protocol: TCP\n          port: 53\n";
-            format!(
-                "  egress:\n{dns}    - to:\n        - ipBlock:\n            cidr: 0.0.0.0/0\n            except:\n{excepts}"
-            )
+        SandboxEgress::Removed(_) => {
+            sandbox.egress.ensure_supported(&sandbox.id)?;
+            unreachable!("a removed egress mode is always refused")
         }
     };
 
     Ok(format!(
-        r#"{dns_values}{{{{- $scopeKey := default "alien.dev/deployment" .Values.logCollector.scope.deploymentLabelKey -}}}}
+        r#"{{{{- $scopeKey := default "alien.dev/deployment" .Values.logCollector.scope.deploymentLabelKey -}}}}
 {{{{- $scopeValue := include "deployment.serviceAccountPrefix" . -}}}}
 {{{{- $peerNamespace := "" -}}}}
 {{{{- if ne (include "deployment.sandboxNamespace" .) .Release.Namespace -}}}}
@@ -369,7 +336,6 @@ spec:
           port: {agent_port}
 {egress}"#,
         id = sandbox.id(),
-        dns_values = dns_values,
         label = LABEL_SANDBOX,
         agent_port = AGENT_PORT,
     ))
