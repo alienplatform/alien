@@ -2303,7 +2303,7 @@ async fn the_bundle_bucket_and_its_guards_render_under_both_setup_modes() {
         let stack = Stack::new("acme-bundles".to_string())
             .add(
                 sandbox_fixture_with(
-                    SandboxEgress::Removed(alien_core::RemovedSandboxEgress::Allow),
+                    SandboxEgress::None,
                     "210987654321.dkr.ecr.us-east-1.amazonaws.com/acme/agents@sha256:f00d",
                 ),
                 ResourceLifecycle::Live,
