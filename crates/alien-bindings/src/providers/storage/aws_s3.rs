@@ -364,6 +364,34 @@ impl ObjectStore for S3Storage {
         )
     }
 
+    fn list_with_offset(
+        &self,
+        prefix: Option<&Path>,
+        offset: &Path,
+    ) -> BoxStream<'static, ObjectStoreResult<ObjectMeta>> {
+        let list_prefix_for_inner = prefix
+            .map(|p| prefixed_path(&self.base_dir, p))
+            .unwrap_or_else(|| self.base_dir.clone());
+        let offset_for_inner = prefixed_path(&self.base_dir, offset);
+
+        let base_dir_for_stream = self.base_dir.clone();
+
+        // Forward to the inner store so it can send a native start-after request
+        // instead of listing the whole prefix and filtering on the client.
+        Box::pin(
+            self.inner
+                .list_with_offset(Some(&list_prefix_for_inner), &offset_for_inner)
+                .and_then(move |mut meta| {
+                    let captured_base_dir = base_dir_for_stream.clone();
+                    async move {
+                        meta.location =
+                            relativize_path(&captured_base_dir, meta.location, "AwsStorage")?;
+                        Ok(meta)
+                    }
+                }),
+        )
+    }
+
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> ObjectStoreResult<ListResult> {
         let list_prefix_for_inner = prefix
             .map(|p| prefixed_path(&self.base_dir, p))
@@ -403,5 +431,64 @@ impl ObjectStore for S3Storage {
 impl std::fmt::Display for S3Storage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "AwsStorage(url={})", self.url)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures::TryStreamExt;
+    use httpmock::prelude::*;
+
+    fn mock_store(server: &MockServer, base_dir: &str) -> S3Storage {
+        let mut store = S3Storage::with_endpoint(
+            "bucket".to_string(),
+            S3CompatibleEndpoint {
+                url: server.base_url(),
+                region: "us-east-1".to_string(),
+                force_path_style: true,
+            },
+            S3Credentials::Static {
+                access_key_id: "test".to_string(),
+                secret_access_key: "test".to_string(),
+            },
+        )
+        .expect("store builds");
+        store.base_dir = Path::from(base_dir);
+        store
+    }
+
+    /// `list_with_offset` must ask S3 to start after the offset (with the base dir
+    /// applied to both prefix and offset), not list the whole prefix and filter locally.
+    #[tokio::test]
+    async fn list_with_offset_sends_start_after() {
+        let server = MockServer::start_async().await;
+        let mock = server
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path("/bucket")
+                    .query_param("list-type", "2")
+                    .query_param("prefix", "base/items/")
+                    .query_param("start-after", "base/items/b");
+                then.status(200).header("content-type", "application/xml").body(
+                    r#"<?xml version="1.0" encoding="UTF-8"?>
+<ListBucketResult><Name>bucket</Name><IsTruncated>false</IsTruncated>
+<Contents><Key>base/items/c</Key><LastModified>2024-01-01T00:00:00.000Z</LastModified><ETag>"x"</ETag><Size>1</Size></Contents>
+<Contents><Key>base/items/d</Key><LastModified>2024-01-01T00:00:00.000Z</LastModified><ETag>"x"</ETag><Size>1</Size></Contents>
+</ListBucketResult>"#,
+                );
+            })
+            .await;
+
+        let store = mock_store(&server, "base");
+        let listed: Vec<ObjectMeta> = store
+            .list_with_offset(Some(&Path::from("items")), &Path::from("items/b"))
+            .try_collect()
+            .await
+            .expect("listing succeeds");
+
+        mock.assert_async().await;
+        let keys: Vec<String> = listed.iter().map(|m| m.location.to_string()).collect();
+        assert_eq!(keys, vec!["items/c", "items/d"]);
     }
 }
