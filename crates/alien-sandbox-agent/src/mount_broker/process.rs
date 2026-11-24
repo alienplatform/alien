@@ -495,20 +495,33 @@ fn seal_helper_capabilities(helpers: &HelperSettings) -> Result<(), String> {
 /// What a root image without image permissions gets at boot: the capability sets of the programs
 /// the kernel runs on its own are emptied, as for an image with a mount broker. Needs the agent's
 /// `CAP_SETPCAP` and `CAP_SYS_MODULE`, so it runs before the agent drops to the root image grant.
-/// `Ok(None)` where the platform does not grant `CAP_SYS_MODULE` (a Kubernetes pod): the kernel's
-/// helpers are the node's there, not reachable from the pod. A write that fails with the
-/// capabilities held is an error.
-pub fn seal_root_image_helpers(helpers: &HelperSettings) -> Result<Option<String>, String> {
+///
+/// `vm_owned_helpers` is true where the sandbox has its own kernel (an AWS MicroVM): the kernel's
+/// helpers then run from the image's own root filesystem, and an agent without the capabilities is
+/// an error. Elsewhere (a Kubernetes pod holds no `CAP_SYS_MODULE`) the helpers are the node's and
+/// `Ok(None)` means there is nothing to seal. A write that fails with the capabilities held is
+/// an error in both cases.
+pub fn seal_root_image_helpers(
+    helpers: &HelperSettings,
+    vm_owned_helpers: bool,
+) -> Result<Option<String>, String> {
     let held = crate::privilege::permitted_capabilities()
         .map_err(|error| format!("step usermodehelper bset: capget: {error}"))?;
-    seal_root_image_helpers_holding(held, helpers)
+    seal_root_image_helpers_holding(held, helpers, vm_owned_helpers)
 }
 
 fn seal_root_image_helpers_holding(
     held: u32,
     helpers: &HelperSettings,
+    vm_owned_helpers: bool,
 ) -> Result<Option<String>, String> {
     if held & SEAL_CAPABILITIES != SEAL_CAPABILITIES {
+        if vm_owned_helpers {
+            return Err(format!(
+                "step usermodehelper bset: writing it needs CAP_SETPCAP and CAP_SYS_MODULE, and the agent was started without {}",
+                crate::privilege::capability_names(SEAL_CAPABILITIES & !held)
+            ));
+        }
         return Ok(None);
     }
     seal_helper_capabilities(helpers)?;
@@ -1667,7 +1680,7 @@ mod tests {
         std::fs::write(&helpers.bset, "4294967295\n").unwrap();
         std::fs::write(&helpers.inheritable, "511\n").unwrap();
         std::fs::write(&helpers.modprobe, "/sbin/modprobe\n").unwrap();
-        let report = seal_root_image_helpers_holding(SEAL_CAPABILITIES, &helpers)
+        let report = seal_root_image_helpers_holding(SEAL_CAPABILITIES, &helpers, true)
             .unwrap()
             .expect("sealed");
         assert_eq!(
@@ -1687,14 +1700,21 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let helpers = settings(dir.path());
         std::fs::write(&helpers.bset, "x\n").unwrap();
-        let error = seal_root_image_helpers_holding(SEAL_CAPABILITIES, &helpers).unwrap_err();
+        let error = seal_root_image_helpers_holding(SEAL_CAPABILITIES, &helpers, true).unwrap_err();
         assert!(error.contains("step usermodehelper inheritable"), "{error}");
-        // A Kubernetes pod holds SETPCAP but not SYS_MODULE: nothing is written.
+        std::fs::write(&helpers.bset, "x\n").unwrap();
+        // A Kubernetes pod holds SETPCAP but not SYS_MODULE, and its helpers are the node's:
+        // nothing is written.
         assert_eq!(
-            seal_root_image_helpers_holding(1 << 8, &helpers).unwrap(),
+            seal_root_image_helpers_holding(1 << 8, &helpers, false).unwrap(),
             None
         );
-        assert_eq!(std::fs::read_to_string(&helpers.bset).unwrap(), "0\t0\n");
+        assert_eq!(std::fs::read_to_string(&helpers.bset).unwrap(), "x\n");
+        // A VM-per-sandbox runtime without the capabilities is refused, naming what is missing.
+        let error = seal_root_image_helpers_holding(1 << 8, &helpers, true).unwrap_err();
+        assert!(error.contains("CAP_SYS_MODULE"), "{error}");
+        assert!(!error.contains("CAP_SETPCAP,"), "{error}");
+        assert_eq!(std::fs::read_to_string(&helpers.bset).unwrap(), "x\n");
     }
 
     /// A refused cgroup join reaches the image spawn with the errno of the step that failed,

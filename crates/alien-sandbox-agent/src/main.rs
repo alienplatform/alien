@@ -250,11 +250,13 @@ fn main() -> Result<()> {
             {
                 match alien_sandbox_agent::mount_broker::seal_root_image_helpers(
                     &alien_sandbox_agent::mount_broker::HelperSettings::default(),
+                    // The run-hook transport is the AWS MicroVM: the kernel there is the VM's own.
+                    aws_image_transport,
                 ) {
                     Ok(Some(report)) => alien_sandbox_agent::boot_report::set("seal", report),
                     Ok(None) => alien_sandbox_agent::boot_report::set(
                         "seal",
-                        "not applicable: the agent has no CAP_SYS_MODULE here".to_string(),
+                        "not applicable (node-owned helpers)".to_string(),
                     ),
                     Err(error) => {
                         // The image does not start; the reason is readable from the sandbox.
