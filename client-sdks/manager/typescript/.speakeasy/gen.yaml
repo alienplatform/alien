@@ -34,7 +34,7 @@ generation:
     skipResponseBodyAssertions: false
   versioningStrategy: manual
 typescript:
-  version: 3.3.76
+  version: 3.3.77
   acceptHeaderEnum: true
   additionalDependencies:
     dependencies: {}
