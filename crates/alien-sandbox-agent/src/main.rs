@@ -227,27 +227,40 @@ fn main() -> Result<()> {
             // with them. It needs the capabilities `restrict_supervisor` drops and a writable
             // `/proc/sys`, which `protect` makes read-only, so it comes before both.
             #[cfg(target_os = "linux")]
-            if image_command_enabled()?
-                && image_permissions.is_none()
-                && alien_sandbox_agent::image_command::image_runs_as_root()?
-            {
-                match alien_sandbox_agent::mount_broker::seal_root_image_helpers(
-                    &alien_sandbox_agent::mount_broker::HelperSettings::default(),
-                    // The run-hook transport is the AWS MicroVM: the kernel there is the VM's own.
-                    aws_image_transport,
-                ) {
-                    Ok(Some(report)) => alien_sandbox_agent::boot_report::set("seal", report),
-                    Ok(None) => alien_sandbox_agent::boot_report::set(
-                        "seal",
-                        "not applicable (node-owned helpers)".to_string(),
-                    ),
+            if image_command_enabled()? && image_permissions.is_none() {
+                match alien_sandbox_agent::image_command::image_runs_as_root() {
                     Err(error) => {
-                        // The image does not start; the reason is readable from the sandbox.
                         alien_sandbox_agent::boot_error::enable();
-                        alien_sandbox_agent::boot_report::set("seal", format!("failed: {error}"));
                         alien_sandbox_agent::boot_error::record(format!(
-                            "cannot seal the kernel helpers: {error}"
+                            "cannot tell which user the image runs as: {error}"
                         ));
+                    }
+                    Ok(false) => {}
+                    Ok(true) => {
+                        match alien_sandbox_agent::mount_broker::seal_root_image_helpers(
+                            &alien_sandbox_agent::mount_broker::HelperSettings::default(),
+                            // The run-hook transport is the AWS MicroVM: the kernel there is the VM's own.
+                            aws_image_transport,
+                        ) {
+                            Ok(Some(report)) => {
+                                alien_sandbox_agent::boot_report::set("seal", report)
+                            }
+                            Ok(None) => alien_sandbox_agent::boot_report::set(
+                                "seal",
+                                "not applicable (helpers belong to the host kernel)".to_string(),
+                            ),
+                            Err(error) => {
+                                // The image does not start; the reason is readable from the sandbox.
+                                alien_sandbox_agent::boot_error::enable();
+                                alien_sandbox_agent::boot_report::set(
+                                    "seal",
+                                    format!("failed: {error}"),
+                                );
+                                alien_sandbox_agent::boot_error::record(format!(
+                                    "cannot seal the kernel helpers: {error}"
+                                ));
+                            }
+                        }
                     }
                 }
             }
