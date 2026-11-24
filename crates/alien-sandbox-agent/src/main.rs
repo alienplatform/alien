@@ -223,6 +223,47 @@ fn main() -> Result<()> {
                     ));
                 }
             }
+            // A root image without image permissions gets the same kernel-helper limits as one
+            // with them. It needs the capabilities `restrict_supervisor` drops and a writable
+            // `/proc/sys`, which `protect` makes read-only, so it comes before both.
+            #[cfg(target_os = "linux")]
+            if image_command_enabled()? && image_permissions.is_none() {
+                match alien_sandbox_agent::image_command::image_runs_as_root() {
+                    Err(error) => {
+                        alien_sandbox_agent::boot_error::enable();
+                        alien_sandbox_agent::boot_error::record(format!(
+                            "cannot tell which user the image runs as: {error}"
+                        ));
+                    }
+                    Ok(false) => {}
+                    Ok(true) => {
+                        match alien_sandbox_agent::mount_broker::seal_root_image_helpers(
+                            &alien_sandbox_agent::mount_broker::HelperSettings::default(),
+                            // The run-hook transport is the AWS MicroVM: the kernel there is the VM's own.
+                            aws_image_transport,
+                        ) {
+                            Ok(Some(report)) => {
+                                alien_sandbox_agent::boot_report::set("seal", report)
+                            }
+                            Ok(None) => alien_sandbox_agent::boot_report::set(
+                                "seal",
+                                "not applicable (helpers belong to the host kernel)".to_string(),
+                            ),
+                            Err(error) => {
+                                // The image does not start; the reason is readable from the sandbox.
+                                alien_sandbox_agent::boot_error::enable();
+                                alien_sandbox_agent::boot_report::set(
+                                    "seal",
+                                    format!("failed: {error}"),
+                                );
+                                alien_sandbox_agent::boot_error::record(format!(
+                                    "cannot seal the kernel helpers: {error}"
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
             if image_command_enabled()? {
                 // The flag only selects who provides the protection. Either way the agent
                 // refuses to continue unless it is in place.

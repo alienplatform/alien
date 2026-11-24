@@ -74,8 +74,11 @@ pub unsafe fn drop_image_to(identity: ExecIdentity) -> io::Result<()> {
     if BLOCK_IPV6.load(Ordering::Relaxed) || BLOCK_BPF.load(Ordering::Relaxed) {
         deny_network_bypass(BLOCK_IPV6.load(Ordering::Relaxed))?;
     }
+    // The broker's filter includes the keyring calls; every other root image gets them alone.
     if IMAGE_MOUNT_FILTER.load(Ordering::Relaxed) {
         deny_mount_bypass()?;
+    } else {
+        deny_keyrings()?;
     }
     Ok(())
 }
@@ -422,6 +425,63 @@ unsafe fn deny_network_bypass(block_ipv6: bool) -> io::Result<()> {
     Ok(())
 }
 
+/// The image filter for every root image: `request_key`, `keyctl` and `add_key` return EPERM.
+/// They reach kernel upcalls (`request-key`) that run with the kernel's own capability sets.
+///
+/// # Safety
+/// Must be called only between `fork` and `exec`, after `no_new_privs`.
+#[cfg(target_os = "linux")]
+unsafe fn deny_keyrings() -> io::Result<()> {
+    #[cfg(target_arch = "x86_64")]
+    const ARCH: u32 = 0xc000003e;
+    #[cfg(target_arch = "aarch64")]
+    const ARCH: u32 = 0xc00000b7;
+    let stmt = |code, k| libc::sock_filter {
+        code,
+        jt: 0,
+        jf: 0,
+        k,
+    };
+    let jump = |k: libc::c_long, jt| libc::sock_filter {
+        code: 0x15,
+        jt,
+        jf: 0,
+        k: k as u32,
+    };
+    let mut filter = [
+        stmt(0x20, 4),
+        libc::sock_filter {
+            code: 0x15,
+            jt: 1,
+            jf: 0,
+            k: ARCH,
+        },
+        stmt(0x06, 0x80000000), // kill a foreign ABI
+        stmt(0x20, 0),
+        // x32 numbers under AUDIT_ARCH_X86_64: kill.
+        libc::sock_filter {
+            code: 0x45,
+            jt: 0,
+            jf: 1,
+            k: 0x40000000,
+        },
+        stmt(0x06, 0x80000000),
+        jump(libc::SYS_request_key, 3),
+        jump(libc::SYS_keyctl, 2),
+        jump(libc::SYS_add_key, 1),
+        stmt(0x06, 0x7fff0000),
+        stmt(0x06, 0x00050000 | libc::EPERM as u32),
+    ];
+    let program = libc::sock_fprog {
+        len: filter.len() as u16,
+        filter: filter.as_mut_ptr(),
+    };
+    if libc::prctl(libc::PR_SET_SECCOMP, 2, &program, 0, 0) != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
 /// The image filter when a mount broker serves the image. The image never holds `SYS_ADMIN`;
 /// this closes the ways around that:
 ///
@@ -534,6 +594,70 @@ mod tests {
     use super::*;
     use std::os::unix::process::CommandExt;
     use std::process::Command;
+
+    /// Runs `setup` in a child, then `request_key`, `keyctl` and `add_key`: "denied" when all three
+    /// return EPERM, "allowed" otherwise.
+    fn keyring_results(setup: impl Fn() -> io::Result<()> + Send + Sync + 'static) -> String {
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "true"]);
+        unsafe {
+            command.pre_exec(move || {
+                setup()?;
+                let call = |number: libc::c_long| {
+                    // A garbage call: unfiltered it fails with some other errno or succeeds.
+                    let result = libc::syscall(number, 0, 0, 0, 0, 0);
+                    if result >= 0 {
+                        0
+                    } else {
+                        io::Error::last_os_error().raw_os_error().unwrap()
+                    }
+                };
+                let denied = |number| call(number) == libc::EPERM;
+                if denied(libc::SYS_request_key)
+                    && denied(libc::SYS_keyctl)
+                    && denied(libc::SYS_add_key)
+                {
+                    Ok(())
+                } else {
+                    Err(io::Error::from_raw_os_error(libc::ENOTSUP))
+                }
+            });
+        }
+        match command.status() {
+            Ok(status) if status.success() => "denied".to_string(),
+            Err(error) if error.raw_os_error() == Some(libc::ENOTSUP) => "allowed".to_string(),
+            other => format!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_keyring_filter_returns_eperm_for_every_keyring_call() {
+        let baseline = keyring_results(|| Ok(()));
+        if baseline != "allowed" {
+            // Some runtimes (Docker's default profile) already deny these calls: no before/after.
+            eprintln!("skipped: the keyring calls are already denied here ({baseline})");
+            return;
+        }
+        assert_eq!(
+            keyring_results(|| unsafe {
+                if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                deny_keyrings()
+            }),
+            "denied"
+        );
+    }
+
+    #[test]
+    #[ignore = "requires root"]
+    fn a_root_image_without_image_permissions_gets_the_keyring_filter() {
+        assert_eq!(unsafe { libc::geteuid() }, 0, "run this test as root");
+        assert_eq!(
+            keyring_results(|| unsafe { drop_image_to(ExecIdentity { uid: 0, gid: 0 }) }),
+            "denied"
+        );
+    }
 
     #[test]
     #[ignore = "requires root with the Docker default capability set and setpriv"]
