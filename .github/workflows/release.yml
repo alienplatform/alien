@@ -492,7 +492,7 @@ jobs:
     needs: [prepare]
     if: ${{ inputs.mode == 'stable' && needs.prepare.outputs.ready == 'true' }}
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 60
+    timeout-minutes: 100
     env:
       CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
     steps:
@@ -720,6 +720,7 @@ jobs:
       # Last step: the script rewrites the manifests in this checkout.
       - name: Check published crates compile without workspace-hack
         if: ${{ inputs.stable_action == 'qualification' }}
+        timeout-minutes: 40
         env:
           CARGO_NET_GIT_FETCH_WITH_CLI: "true"
         run: scripts/check-published-crates.sh

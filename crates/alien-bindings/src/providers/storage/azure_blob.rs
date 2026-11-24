@@ -297,8 +297,8 @@ impl ObjectStore for BlobStorage {
 
         let base_dir_for_stream = self.base_dir.clone();
 
-        // Forward to the inner store so it can send a native start-after request
-        // instead of listing the whole prefix and filtering on the client.
+        // Forward to the inner store so it applies the offset itself (object_store's Azure
+        // list filters on the client) and prefix and offset get the same base_dir handling.
         Box::pin(
             self.inner
                 .list_with_offset(Some(&list_prefix_for_inner), &offset_for_inner)
