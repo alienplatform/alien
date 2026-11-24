@@ -2082,6 +2082,7 @@ async fn a_lease_without_its_command_record_is_released_by_no_caller() {
             "{name}: the lease must stay"
         );
     }
+}
 
 /// A credential for reporting decisions on access requests carries a role of
 /// its own. On this manager nothing accepts that role, so every route refuses
