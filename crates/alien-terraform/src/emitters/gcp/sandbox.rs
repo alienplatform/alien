@@ -548,11 +548,14 @@ const SIGN_JWT_PERMISSION: &str = "iam.serviceAccounts.signJwt";
 /// sandbox: the role is project-wide and its id is fixed.
 const PREVIEW_SIGN_ROLE_LABEL: &str = "gcp_role_sandbox_preview_sign";
 
-/// Whether setup creates the edge-signing identity: only where the sandbox needs one (preview
-/// ports, or an `internet` sandbox's private ingress) and the deployment owns the engine, so a
-/// sandbox with neither adds nothing to an existing plan.
+/// Whether the generated package creates the edge-signing identity: only for a sandbox with
+/// preview ports or `internet` egress, on a deployment that owns the engine. Its signing role is a
+/// project custom role; an install that manages its roles outside the module (`gcp_manage_custom_roles
+/// = false`) has no such role for a sandbox that had no signer before, and the next apply would
+/// fail on the binding. Interactive-only sandboxes get their signer from direct setup instead.
 fn has_preview_signer(ctx: &EmitContext<'_>, sandbox: &Sandbox) -> bool {
-    sandbox.needs_gcp_edge_signer() && ctx.resource.lifecycle == ResourceLifecycle::Frozen
+    (!sandbox.preview_ports.is_empty() || sandbox.egress == SandboxEgress::Internet)
+        && ctx.resource.lifecycle == ResourceLifecycle::Frozen
 }
 
 /// Creates the per-deployment identity the GCP edge accepts a signed JWT from, and lets the
@@ -1237,19 +1240,16 @@ mod tests {
                     .collect()
             };
 
-            // No preview ports still gets the identity: interactive commands reach the agent
-            // through the edge on every GCP sandbox.
+            // No preview ports and no internet egress: the package adds nothing to an existing
+            // plan (the signer's role is a project custom role an install that manages its roles
+            // itself may not have). Direct setup creates the signer for such a sandbox.
             let (none, binding, none_import) = render(vec![], true);
-            assert_eq!(
-                kinds(&none)
-                    .iter()
-                    .filter(|k| k.as_str() == "google_service_account")
-                    .count(),
-                1,
+            assert!(
+                !kinds(&none).iter().any(|k| k == "google_service_account"),
                 "{none:?}"
             );
-            assert!(object_keys(&binding).contains("previewServiceAccount"));
-            assert!(object_keys(&none_import).contains("previewServiceAccount"));
+            assert!(!object_keys(&binding).contains("previewServiceAccount"));
+            assert!(!object_keys(&none_import).contains("previewServiceAccount"));
 
             let (fragment, binding, import_ref) = render(vec![8080, 8081], true);
             let all = kinds(&fragment);
@@ -1565,11 +1565,12 @@ mod tests {
                 .expect("the binding renders")
                 .expect("an Agent Platform sandbox has a binding");
             assert!(object_keys(&emitted).contains("previewServiceAccount"));
-            // Every other sandbox has it too: interactive commands go through the same edge.
+            // A sandbox with neither preview ports nor internet egress gets no signer from the
+            // package, so an install that manages its own roles needs no new one to upgrade.
             let open = emit_binding(SandboxEgress::Allow, Some(3600))
                 .expect("the binding renders")
                 .expect("an Agent Platform sandbox has a binding");
-            assert!(object_keys(&open).contains("previewServiceAccount"));
+            assert!(!object_keys(&open).contains("previewServiceAccount"));
         }
 
         /// The emitted keys are read against the binding type, not a second hand-typed list, so
@@ -1577,11 +1578,11 @@ mod tests {
         /// set on both sides so the key sets are comparable whole.
         #[test]
         fn emitted_binding_keys_match_the_binding_type() {
-            let emitted = emit_binding(SandboxEgress::Allow, Some(3600))
+            let emitted = emit_binding(SandboxEgress::Internet, Some(3600))
                 .expect("the binding renders")
                 .expect("an Agent Platform sandbox has a binding");
 
-            // Every sandbox's setup creates the edge signer, so the binding names it.
+            // An `internet` sandbox's package creates the edge signer, so the binding names it.
             let mut binding =
                 SandboxBinding::gcp_agent_platform("e", "t", "us-central1", Some(3600), true);
             if let SandboxBinding::GcpAgentPlatform(inner) = &mut binding {

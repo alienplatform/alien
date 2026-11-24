@@ -777,33 +777,35 @@ async fn proxy_embeddings(
     };
     let embedding = ai_catalog::resolve_embedding_for(&model, cloud).ok_or_else(not_available)?;
     // Azure forwards the request to its deployment; Vertex maps it onto `:predict`.
-    let azure_request = if cloud == Platform::Azure {
-        let endpoint = route
-            .azure_endpoint
-            .as_deref()
-            .ok_or_else(|| missing_field(route, "endpoint"))?;
-        let base = route
-            .upstream_base_override
-            .clone()
-            .unwrap_or_else(|| endpoint.to_string());
-        // The deployment path, not `/openai/v1/embeddings`: the v1 embeddings route answers
-        // 401 PermissionDenied for the Cognitive Services User role the workload holds,
-        // while the deployment route accepts it (verified against a real account).
-        let url = format!(
-            "{}/openai/deployments/{}/embeddings?api-version={AZURE_EMBEDDINGS_API_VERSION}",
-            base.trim_end_matches('/'),
-            embedding.upstream_id
-        );
-        payload["model"] = Value::String(embedding.upstream_id.to_string());
-        let upstream_body =
-            serde_json::to_vec(&payload)
-                .into_alien_error()
-                .context(ErrorData::Other {
-                    message: "could not re-serialize the rewritten request body".to_string(),
-                })?;
-        Some((url, upstream_body))
-    } else {
-        None
+    let azure_request = match cloud {
+        Platform::Azure => {
+            let endpoint = route
+                .azure_endpoint
+                .as_deref()
+                .ok_or_else(|| missing_field(route, "endpoint"))?;
+            let base = route
+                .upstream_base_override
+                .clone()
+                .unwrap_or_else(|| endpoint.to_string());
+            // The deployment path, not `/openai/v1/embeddings`: the v1 embeddings route answers
+            // 401 PermissionDenied for the Cognitive Services User role the workload holds,
+            // while the deployment route accepts it (verified against a real account).
+            let url = format!(
+                "{}/openai/deployments/{}/embeddings?api-version={AZURE_EMBEDDINGS_API_VERSION}",
+                base.trim_end_matches('/'),
+                embedding.upstream_id
+            );
+            payload["model"] = Value::String(embedding.upstream_id.to_string());
+            let upstream_body =
+                serde_json::to_vec(&payload)
+                    .into_alien_error()
+                    .context(ErrorData::Other {
+                        message: "could not re-serialize the rewritten request body".to_string(),
+                    })?;
+            Some((url, upstream_body))
+        }
+        Platform::Gcp => None,
+        _ => return Err(not_available()),
     };
     // Embeddings answer in the OpenAI shape, so the chat-completions token parser reads
     // `prompt_tokens`. Everything from here on is a provider-bound request and is reported.
@@ -2379,6 +2381,7 @@ mod tests {
                             serde_json::from_slice(req.body.as_deref().unwrap_or_default())
                                 .unwrap_or(Value::Null);
                         body["parameters"]["outputDimensionality"] == 3072
+                            && body["parameters"]["autoTruncate"] == false
                             && body.get("model").is_none()
                             && body["instances"].as_array().is_some_and(|i| i.len() == 1)
                     });
@@ -2432,7 +2435,9 @@ mod tests {
                     let body: Value =
                         serde_json::from_slice(req.body.as_deref().unwrap_or_default())
                             .unwrap_or(Value::Null);
-                    body.get("parameters").is_none() && body["instances"][0]["content"] == "hi"
+                    body["parameters"]["autoTruncate"] == false
+                        && body["parameters"].get("outputDimensionality").is_none()
+                        && body["instances"][0]["content"] == "hi"
                 });
                 then.status(200)
                     .header("content-type", "application/json")
@@ -2491,6 +2496,56 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), 429);
+    }
+
+    #[tokio::test]
+    async fn vertex_embeddings_stop_at_the_first_refusal() {
+        let server = MockServer::start_async().await;
+        let mock = server
+            .mock_async(|when, then| {
+                when.method(POST);
+                then.status(429).body("quota");
+            })
+            .await;
+        let url = serve(build_router(vec![vertex_embedding_route(
+            &server.base_url(),
+        )]))
+        .await;
+        let inputs: Vec<String> = (0..64).map(|i| format!("text {i}")).collect();
+        let resp = reqwest::Client::new()
+            .post(format!("{url}/llm/v1/embeddings"))
+            .json(&json!({"model": "gemini-embedding-001", "input": inputs}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 429);
+        // Only the calls in flight when the first refusal arrived, not one per input.
+        let hits = mock.hits_async().await;
+        assert!(hits <= 8, "{hits} calls reached the upstream");
+    }
+
+    #[tokio::test]
+    async fn vertex_embeddings_refuse_an_input_the_model_would_truncate() {
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(POST);
+                then.status(200)
+                    .header("content-type", "application/json")
+                    .body(r#"{"predictions":[{"embeddings":{"values":[1.0],"statistics":{"token_count":2048,"truncated":true}}}]}"#);
+            })
+            .await;
+        let url = serve(build_router(vec![vertex_embedding_route(
+            &server.base_url(),
+        )]))
+        .await;
+        let resp = reqwest::Client::new()
+            .post(format!("{url}/llm/v1/embeddings"))
+            .json(&json!({"model": "gemini-embedding-001", "input": "long"}))
+            .send()
+            .await
+            .unwrap();
+        assert!(resp.status().is_client_error(), "{}", resp.status());
     }
 
     #[tokio::test]

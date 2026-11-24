@@ -4910,3 +4910,31 @@ async fn run_interactive_renews_an_edge_credential_that_is_about_to_end() {
     command.input.write(b"abc").await.expect("write");
     assert_eq!(signed.load(Ordering::SeqCst), 2, "each request signs again");
 }
+
+/// The margin is 60 s: a credential with a little more than that left serves every request of
+/// the command, one with a little less is signed again for each.
+#[tokio::test]
+async fn run_interactive_reuses_an_edge_credential_just_outside_the_renewal_margin() {
+    for (lifetime, expected_signs) in [(90, 1), (50, 2)] {
+        let (address, _seen) = loopback_edge::serve().await;
+        let mut client = MockAgentPlatformApi::new();
+        client
+            .expect_get_sandbox()
+            .returning(|_, id| Ok(running_with_route(id, &far_future())));
+        let signer = FixedSigner::living(lifetime);
+        let signed = Arc::clone(&signer.signed);
+        let provider = provider(client)
+            .with_preview_signer(Arc::new(signer))
+            .with_private_endpoint(address);
+        let command = provider
+            .run_interactive("s1", interactive_request())
+            .await
+            .expect("the stream opens");
+        command.input.write(b"abc").await.expect("write");
+        assert_eq!(
+            signed.load(Ordering::SeqCst),
+            expected_signs,
+            "a credential with {lifetime}s left"
+        );
+    }
+}

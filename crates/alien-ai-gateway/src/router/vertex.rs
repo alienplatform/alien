@@ -174,60 +174,73 @@ pub(crate) async fn proxy_vertex_embeddings(
         base.trim_end_matches('/')
     );
 
+    // Over-long input is an error, as it is on OpenAI, not a silently shortened vector.
+    let mut parameters = json!({ "autoTruncate": false });
+    if let Some(dimensions) = dimensions {
+        parameters["outputDimensionality"] = json!(dimensions);
+    }
     let calls = inputs.into_iter().map(|text| {
         let url = url.clone();
+        let body = json!({ "instances": [{ "content": text }], "parameters": parameters });
         async move {
-            let mut body = json!({ "instances": [{ "content": text }] });
-            if let Some(dimensions) = dimensions {
-                body["parameters"] = json!({ "outputDimensionality": dimensions });
-            }
             let body = serde_json::to_vec(&body)
                 .into_alien_error()
                 .context(ErrorData::Other {
                     message: "could not serialize the embeddings request".to_string(),
                 })?;
-            sign_and_execute(client, route, &url, "", body, &[]).await
+            let upstream = sign_and_execute(client, route, &url, "", body, &[]).await?;
+            if !upstream.status().is_success() {
+                return Ok(Err(upstream));
+            }
+            let reply: Value =
+                upstream
+                    .json()
+                    .await
+                    .into_alien_error()
+                    .context(ErrorData::UpstreamFailed {
+                        message: "the embeddings provider returned a reply that is not JSON"
+                            .to_string(),
+                    })?;
+            let embeddings = reply.pointer("/predictions/0/embeddings").ok_or_else(|| {
+                AlienError::new(ErrorData::UpstreamFailed {
+                    message: "the embeddings reply has no `predictions[0].embeddings`".to_string(),
+                })
+            })?;
+            if embeddings.pointer("/statistics/truncated") == Some(&Value::Bool(true)) {
+                return Err(AlienError::new(ErrorData::InvalidRequest {
+                    message: "an input is longer than the model accepts (2048 tokens)".to_string(),
+                }));
+            }
+            let values = embeddings.get("values").cloned().ok_or_else(|| {
+                AlienError::new(ErrorData::UpstreamFailed {
+                    message: "the embeddings reply has no `values`".to_string(),
+                })
+            })?;
+            let tokens = embeddings
+                .pointer("/statistics/token_count")
+                .and_then(|count| count.as_f64())
+                .map(|count| count as u64)
+                .unwrap_or(0);
+            Ok::<_, AlienError<ErrorData>>(Ok((values, tokens)))
         }
     });
-    // In order, so `index` is the input's position.
-    let replies: Vec<Result<reqwest::Response>> = stream::iter(calls)
-        .buffered(EMBEDDING_CONCURRENCY)
-        .collect()
-        .await;
-
-    let mut data = Vec::with_capacity(replies.len());
+    // In order, so `index` is the input's position. The first failure ends the batch: calls not
+    // yet started never start, and those in flight are dropped, so a refused quota is not spent
+    // on the rest of the inputs.
+    let mut replies = stream::iter(calls).buffered(EMBEDDING_CONCURRENCY);
+    let mut data = Vec::new();
     let mut tokens: u64 = 0;
-    for (index, reply) in replies.into_iter().enumerate() {
-        let upstream = reply?;
-        if !upstream.status().is_success() {
-            // The first refusal is the answer, mapped like every other upstream error.
-            return forward_response(upstream).await;
+    while let Some(reply) = replies.next().await {
+        match reply? {
+            // The refusal is the answer, mapped like every other upstream error.
+            Err(refused) => return forward_response(refused).await,
+            Ok((values, used)) => {
+                tokens += used;
+                data.push(
+                    json!({ "object": "embedding", "index": data.len(), "embedding": values }),
+                );
+            }
         }
-        let reply: Value =
-            upstream
-                .json()
-                .await
-                .into_alien_error()
-                .context(ErrorData::UpstreamFailed {
-                    message: "the embeddings provider returned a reply that is not JSON"
-                        .to_string(),
-                })?;
-        let embeddings = reply.pointer("/predictions/0/embeddings").ok_or_else(|| {
-            AlienError::new(ErrorData::UpstreamFailed {
-                message: "the embeddings reply has no `predictions[0].embeddings`".to_string(),
-            })
-        })?;
-        let values = embeddings.get("values").cloned().ok_or_else(|| {
-            AlienError::new(ErrorData::UpstreamFailed {
-                message: "the embeddings reply has no `values`".to_string(),
-            })
-        })?;
-        tokens += embeddings
-            .pointer("/statistics/token_count")
-            .and_then(|count| count.as_f64())
-            .map(|count| count as u64)
-            .unwrap_or(0);
-        data.push(json!({ "object": "embedding", "index": index, "embedding": values }));
     }
 
     Ok(axum::Json(json!({

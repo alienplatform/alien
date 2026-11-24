@@ -807,13 +807,6 @@ pub fn stack_needs_named_subnets_at_setup(stack: &crate::Stack) -> bool {
 }
 
 impl Sandbox {
-    /// Whether a Google Cloud deployment of this sandbox needs the edge-signing identity. Every
-    /// one does: interactive commands, preview ports and an `internet` sandbox's private ingress
-    /// all reach the agent through the edge, which checks a credential this identity signs.
-    pub fn needs_gcp_edge_signer(&self) -> bool {
-        true
-    }
-
     pub(crate) fn setup_digest_value(&self) -> serde_json::Value {
         match &self.egress {
             SandboxEgress::None => serde_json::json!({"mode":"deny"}),
