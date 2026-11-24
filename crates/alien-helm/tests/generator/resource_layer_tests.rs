@@ -127,6 +127,11 @@ fn a_live_sandbox_emits_the_same_chart_resources_as_a_frozen_one() {
             chart.files.keys().collect::<Vec<_>>()
         );
     }
+    let policy = chart
+        .files
+        .get("templates/sandbox-agent-networkpolicy.yaml")
+        .expect("the sandbox NetworkPolicy must render");
+    assert!(!policy.contains("ipBlock:"), "{policy}");
     assert_helm_valid(&chart, "sandbox_layer_live");
 }
 
