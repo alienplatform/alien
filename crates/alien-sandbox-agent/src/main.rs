@@ -223,26 +223,9 @@ fn main() -> Result<()> {
                     ));
                 }
             }
-            if image_command_enabled()? {
-                // The flag only selects who provides the protection. Either way the agent
-                // refuses to continue unless it is in place.
-                let protect = if std::env::var_os(alien_core::sandbox_image::ENV_PROTECTED_MOUNTS)
-                    .is_some()
-                {
-                    alien_sandbox_agent::read_only_mounts::require
-                } else {
-                    alien_sandbox_agent::protected_files::protect
-                };
-                protect(&state.agent_binary, std::path::Path::new("/opt/alien"))
-                    .into_alien_error()
-                    .context(failed(
-                        "protect agent bootstrap files",
-                        "cannot make the agent binary and metadata read-only before image startup"
-                            .into(),
-                    ))?;
-            }
             // A root image without image permissions gets the same kernel-helper limits as one
-            // with them. This needs capabilities `restrict_supervisor` drops, so it comes first.
+            // with them. It needs the capabilities `restrict_supervisor` drops and a writable
+            // `/proc/sys`, which `protect` makes read-only, so it comes before both.
             #[cfg(target_os = "linux")]
             if image_command_enabled()?
                 && image_permissions.is_none()
@@ -267,6 +250,24 @@ fn main() -> Result<()> {
                         ));
                     }
                 }
+            }
+            if image_command_enabled()? {
+                // The flag only selects who provides the protection. Either way the agent
+                // refuses to continue unless it is in place.
+                let protect = if std::env::var_os(alien_core::sandbox_image::ENV_PROTECTED_MOUNTS)
+                    .is_some()
+                {
+                    alien_sandbox_agent::read_only_mounts::require
+                } else {
+                    alien_sandbox_agent::protected_files::protect
+                };
+                protect(&state.agent_binary, std::path::Path::new("/opt/alien"))
+                    .into_alien_error()
+                    .context(failed(
+                        "protect agent bootstrap files",
+                        "cannot make the agent binary and metadata read-only before image startup"
+                            .into(),
+                    ))?;
             }
             alien_sandbox_agent::privilege::restrict_supervisor(network_admin)
                 .into_alien_error()
