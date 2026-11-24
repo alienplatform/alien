@@ -44,7 +44,7 @@ The control plane is your SaaS: a chat UI and a thread router. It talks to each 
 | `connector` | Container, commands | The only way to the customer's private systems: the internal API and the scanner. No public endpoint; a sandbox reaches it only through its link. It checks the per-turn token on every request, lets reads through, holds writes until they are approved, and adds the customer's own scanner key to the scanner's requests. |
 | `llm` | AI | The deployment's own model service. |
 
-Outside the stack, the customer's network: [`customer-network/terraform/`](./customer-network/terraform) creates a VPC with private subnets behind a NAT gateway, a small orders API ([`customer-network/internal-api/`](./customer-network/internal-api)) and a scanner that lists findings ([`customer-network/scanner/`](./customer-network/scanner)), both on a private address. The stack is deployed into that VPC.
+Outside the stack, the customer's network: [`customer-network/terraform/`](./customer-network/terraform) creates a VPC with private subnets behind a NAT gateway, plus the dedicated sandbox and gateway subnets the stack needs, a small orders API ([`customer-network/internal-api/`](./customer-network/internal-api)) and a scanner that lists findings ([`customer-network/scanner/`](./customer-network/scanner)), both on a private address. The stack is deployed into that VPC.
 
 ## Credentials the customer owns
 
@@ -135,23 +135,24 @@ Open http://localhost:3000, start a thread and send a message.
    ```bash
    cd customer-network/terraform
    terraform init && terraform apply -var scanner_api_key=<a key you choose>
-   terraform output -raw deploy_flags
    ```
 
    The scanner's key is stored in the account as an SSM parameter and read by the instance at boot (it is also in Terraform's state). The NAT gateway uses one Elastic IP and the stack adds its own; check the account's EIP and VPC quotas first.
 
-2. Release the stack and deploy it into that VPC with `byo-vpc-aws`. `deploy_flags` is the network (`--network byo`, the VPC, comma-separated subnet ids, the security group) and the two inputs, in the form `alien deploy` takes. This is a normal Alien deployment: sign in, release, then deploy with a deployment group token.
+2. Release the stack and deploy it into that VPC with `byo-vpc-aws`. A sandbox with internet egress (this one reaches the model and the connector through the gateway) takes an existing VPC only through the Terraform or CloudFormation setup, which asks for the VPC, its subnets, and two dedicated subnet sets: `sandbox_subnet_ids` (local routes only) and `sandbox_gateway_subnet_ids` (local routes and the NAT). The network Terraform created both, and prints the values:
 
    ```bash
    # The AWS build runs on arm64 and a sandbox is a live resource there.
    cd data-plane
    SANDBOX_LIFECYCLE=live alien release
 
-   alien deploy --token <deployment group token> --platform aws --name agent-sandboxes \
-     $(cd ../customer-network/terraform && terraform output -raw deploy_flags)
+   # Terraform setup: pass these as the module's variables.
+   (cd ../customer-network/terraform && terraform output terraform_setup_values)
+   # CloudFormation setup: pass these as the stack's parameters.
+   (cd ../customer-network/terraform && terraform output -raw cloudformation_parameters)
    ```
 
-   Run it with AWS credentials for the account the stack goes into. Then write the same scanner key into the deployment's secret store, as `alien deploy` prints (an SSM parameter in the account).
+   Also give the setup the two stack inputs: `internalApiUrl` (`terraform output -raw internal_api_url`) and `scannerUrl` (`terraform output -raw scanner_url`). Then write the scanner key into the deployment's secret store (an SSM parameter in the account).
 
 3. Point the control plane at the deployment (`ALIEN_MANAGER_URL`, `ALIEN_DEPLOYMENT_ID`, `ALIEN_TOKEN`) and start it as above.
 

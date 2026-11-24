@@ -24,16 +24,42 @@ output "scanner_url" {
   value       = "http://${local.internal_api_ip}:8081"
 }
 
-# Everything `alien deploy` needs about this network, in the form its flags take: comma-separated
-# subnet ids and the two inputs. Use it as `alien deploy ... $(terraform output -raw deploy_flags)`.
-output "deploy_flags" {
+output "sandbox_subnet_ids" {
+  value = aws_subnet.sandbox[*].id
+}
+
+output "sandbox_gateway_subnet_ids" {
+  value = aws_subnet.sandbox_gateway[*].id
+}
+
+output "sandbox_gateway_subnet_cidrs" {
+  value = aws_subnet.sandbox_gateway[*].cidr_block
+}
+
+# The network values the stack's Terraform setup asks for: the variables of the rendered module.
+output "terraform_setup_values" {
+  value = {
+    network_mode               = "use-existing"
+    vpc_id                     = aws_vpc.this.id
+    public_subnet_ids          = aws_subnet.public[*].id
+    private_subnet_ids         = aws_subnet.private[*].id
+    security_group_ids         = [aws_security_group.stack.id]
+    sandbox_subnet_ids         = aws_subnet.sandbox[*].id
+    sandbox_gateway_subnet_ids = aws_subnet.sandbox_gateway[*].id
+  }
+}
+
+# The same for the CloudFormation setup, as `--parameter-overrides` arguments. Lists are
+# comma-separated.
+output "cloudformation_parameters" {
   value = join(" ", [
-    "--network byo",
-    "--vpc-id ${aws_vpc.this.id}",
-    "--public-subnet-ids ${join(",", aws_subnet.public[*].id)}",
-    "--private-subnet-ids ${join(",", aws_subnet.private[*].id)}",
-    "--security-group-ids ${aws_security_group.stack.id}",
-    "--input internalApiUrl=http://${local.internal_api_ip}:8080",
-    "--input scannerUrl=http://${local.internal_api_ip}:8081",
+    "NetworkMode=use-existing",
+    "VpcId=${aws_vpc.this.id}",
+    "PublicSubnetIds=${join(",", aws_subnet.public[*].id)}",
+    "PrivateSubnetIds=${join(",", aws_subnet.private[*].id)}",
+    "SecurityGroupIds=${aws_security_group.stack.id}",
+    "SandboxSubnetIds=${join(",", aws_subnet.sandbox[*].id)}",
+    "SandboxGatewaySubnetIds=${join(",", aws_subnet.sandbox_gateway[*].id)}",
+    "SandboxGatewaySubnetCidrs=${join(",", aws_subnet.sandbox_gateway[*].cidr_block)}",
   ])
 }

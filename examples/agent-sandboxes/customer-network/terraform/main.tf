@@ -7,7 +7,8 @@ data "aws_availability_zones" "available" {
 }
 
 locals {
-  azs = slice(data.aws_availability_zones.available.names, 0, 2)
+  # Two zones: the stack's sandbox and gateway subnets each need at least two.
+  azs = length(var.availability_zones) > 0 ? var.availability_zones : slice(data.aws_availability_zones.available.names, 0, 2)
   # A fixed private address, so the README can show the sandbox being refused at it.
   internal_api_ip = cidrhost(cidrsubnet(var.vpc_cidr, 8, 10), 50)
   tags            = { Name = var.name_prefix }
@@ -82,6 +83,53 @@ resource "aws_route_table_association" "private" {
   count          = 2
   subnet_id      = aws_subnet.private[count.index].id
   route_table_id = aws_route_table.private.id
+}
+
+# Two more pairs of subnets, dedicated to the stack's sandboxes. An internet-egress sandbox
+# needs both, and Alien checks them before it deploys:
+#   sandbox subnets:  only the VPC's local route, so nothing in them has a way out;
+#   gateway subnets:  the local route and the same NAT as the private subnets; the egress
+#                     gateway (the only way out for a sandbox) runs here.
+resource "aws_subnet" "sandbox" {
+  count             = 2
+  vpc_id            = aws_vpc.this.id
+  availability_zone = local.azs[count.index]
+  cidr_block        = cidrsubnet(var.vpc_cidr, 8, 20 + count.index)
+  tags              = { Name = "${var.name_prefix}-sandbox-${count.index}" }
+}
+
+resource "aws_route_table" "sandbox" {
+  vpc_id = aws_vpc.this.id
+  tags   = { Name = "${var.name_prefix}-sandbox" }
+}
+
+resource "aws_route_table_association" "sandbox" {
+  count          = 2
+  subnet_id      = aws_subnet.sandbox[count.index].id
+  route_table_id = aws_route_table.sandbox.id
+}
+
+resource "aws_subnet" "sandbox_gateway" {
+  count             = 2
+  vpc_id            = aws_vpc.this.id
+  availability_zone = local.azs[count.index]
+  cidr_block        = cidrsubnet(var.vpc_cidr, 8, 30 + count.index)
+  tags              = { Name = "${var.name_prefix}-sandbox-gateway-${count.index}" }
+}
+
+resource "aws_route_table" "sandbox_gateway" {
+  vpc_id = aws_vpc.this.id
+  route {
+    cidr_block     = "0.0.0.0/0"
+    nat_gateway_id = aws_nat_gateway.this.id
+  }
+  tags = { Name = "${var.name_prefix}-sandbox-gateway" }
+}
+
+resource "aws_route_table_association" "sandbox_gateway" {
+  count          = 2
+  subnet_id      = aws_subnet.sandbox_gateway[count.index].id
+  route_table_id = aws_route_table.sandbox_gateway.id
 }
 
 # For the stack's workloads: all outbound, inbound only from itself.
@@ -170,7 +218,7 @@ resource "aws_iam_instance_profile" "internal_api" {
 
 resource "aws_instance" "internal_api" {
   ami                         = data.aws_ssm_parameter.al2023_arm64.value
-  instance_type               = "t4g.nano"
+  instance_type               = var.instance_type
   subnet_id                   = aws_subnet.private[0].id
   private_ip                  = local.internal_api_ip
   associate_public_ip_address = false
