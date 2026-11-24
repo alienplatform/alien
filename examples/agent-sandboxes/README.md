@@ -134,27 +134,43 @@ Open http://localhost:3000, start a thread and send a message.
 
    ```bash
    cd customer-network/terraform
-   terraform init && terraform apply -var scanner_api_key=<a key you choose>
+   terraform init && terraform apply -var region=<region> -var scanner_api_key=<a key you choose>
    ```
 
-   The scanner's key is stored in the account as an SSM parameter and read by the instance at boot (it is also in Terraform's state). The NAT gateway uses one Elastic IP and the stack adds its own; check the account's EIP and VPC quotas first.
+   The scanner's key is stored in the account as an SSM parameter and read by the instance at boot (it is also in Terraform's state). The NAT gateway uses one Elastic IP and the stack adds its own; check the account's EIP and VPC quotas first. If the internal API's instance type has no capacity in the first two zones, set `instance_type` or `availability_zones`.
 
-2. Release the stack and deploy it into that VPC with `byo-vpc-aws`. A sandbox with internet egress (this one reaches the model and the connector through the gateway) takes an existing VPC only through the Terraform or CloudFormation setup, which asks for the VPC, its subnets, and two dedicated subnet sets: `sandbox_subnet_ids` (local routes only) and `sandbox_gateway_subnet_ids` (local routes and the NAT). The network Terraform created both, and prints the values:
+2. Release the stack:
 
    ```bash
    # The AWS build runs on arm64 and a sandbox is a live resource there.
    cd data-plane
    SANDBOX_LIFECYCLE=live alien release
-
-   # Terraform setup: pass these as the module's variables.
-   (cd ../customer-network/terraform && terraform output terraform_setup_values)
-   # CloudFormation setup: pass these as the stack's parameters.
-   (cd ../customer-network/terraform && terraform output -raw cloudformation_parameters)
    ```
 
-   Also give the setup the two stack inputs: `internalApiUrl` (`terraform output -raw internal_api_url`) and `scannerUrl` (`terraform output -raw scanner_url`). Then write the scanner key into the deployment's secret store (an SSM parameter in the account).
+3. Deploy it into the VPC. A sandbox with internet egress (this one reaches the model and the connector through the gateway) takes an existing VPC only through the CloudFormation or Terraform setup, not `alien deploy --network byo`. The setup asks for the VPC, its subnets, and two dedicated subnet sets: `sandbox_subnet_ids` (local routes only) and `sandbox_gateway_subnet_ids` (local routes and the NAT). The network Terraform created them and prints the values:
 
-3. Point the control plane at the deployment (`ALIEN_MANAGER_URL`, `ALIEN_DEPLOYMENT_ID`, `ALIEN_TOKEN`) and start it as above.
+   ```bash
+   # CloudFormation: the stack's parameters
+   (cd ../customer-network/terraform && terraform output -raw cloudformation_parameters)
+   # Terraform setup: the module's variables
+   (cd ../customer-network/terraform && terraform output terraform_setup_values)
+   ```
+
+   For CloudFormation, find the package with `alien packages ls`, download the template with `alien packages download <package id> --artifact targets.aws -o template.yaml`, and upload it to an S3 bucket (it is larger than the 51 KB inline limit). Then create the stack with the printed parameters, plus the install `Token`, `ManagementExternalId` and `ManagingRoleArn` from the setup page, and the two stack inputs `InputInternalApiUrl` (`terraform output -raw internal_api_url`) and `InputScannerUrl` (`terraform output -raw scanner_url`):
+
+   ```bash
+   aws cloudformation create-stack --stack-name <stack> --template-url <s3 url> \
+     --parameters file://params.json --capabilities CAPABILITY_NAMED_IAM
+   ```
+
+4. Write the scanner key into the deployment's secret store. It is an SSM parameter named `<stack>-deployer-secrets-scanner-api-key`:
+
+   ```bash
+   aws ssm put-parameter --name <stack>-deployer-secrets-scanner-api-key \
+     --type SecureString --value file://key
+   ```
+
+5. Point the control plane at the deployment (`ALIEN_MANAGER_URL`, `ALIEN_DEPLOYMENT_ID`, `ALIEN_TOKEN`) and start it as above.
 
 The model id is `claude-sonnet-4-6` by default; set `MODEL` when you release to use another model your account can invoke on Bedrock.
 
