@@ -19,6 +19,7 @@ pub mod service_account;
 pub mod storage;
 pub mod vault;
 pub mod worker;
+pub(crate) mod workload_restart;
 
 use crate::registry::HelmRegistry;
 use alien_core::{

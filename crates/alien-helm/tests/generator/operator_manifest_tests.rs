@@ -910,3 +910,635 @@ fn chart_version_keeps_pod_templates_but_image_changes_roll_them() {
         }
     }
 }
+
+const POLICY_API: &str = "admissionregistration.k8s.io/v1/ValidatingAdmissionPolicy";
+const WORKLOAD_KINDS: [&str; 3] = ["deployments", "statefulsets", "daemonsets"];
+
+/// An operation that may patch the given workload kinds, declared as a plugin author would.
+fn restart_operation(kinds: &[&str], names: &[&str]) -> KubernetesOperationPermissions {
+    let mut operation = custom_operation("restarter");
+    operation.tier = alien_operations_sdk::RiskTier::Mutating;
+    operation.permissions.rules = kinds
+        .iter()
+        .map(|kind| alien_operations_sdk::KubernetesPermissionRule {
+            api_group: "apps".into(),
+            resource: (*kind).into(),
+            verbs: vec!["patch".into()],
+            resource_names: names.iter().map(|name| (*name).into()).collect(),
+            reason: "Restart workloads".into(),
+        })
+        .collect();
+    operation
+}
+
+/// The Operator template as a Helm chart, rendered for release `rel` in namespace `ns` on a
+/// cluster serving `api_versions`.
+fn rendered_operator_chart(
+    scope: OperatorScope,
+    permission: OperatorPermission,
+    operations: &[KubernetesOperationPermissions],
+    api_versions: &[&str],
+) -> Vec<YamlValue> {
+    rendered_operator_chart_with_values(scope, permission, operations, api_versions, None)
+}
+
+fn rendered_operator_chart_with_values(
+    scope: OperatorScope,
+    permission: OperatorPermission,
+    operations: &[KubernetesOperationPermissions],
+    api_versions: &[&str],
+    values: Option<&str>,
+) -> Vec<YamlValue> {
+    let template = generate_operator_manifest(OperatorManifestOptions {
+        custom_operation_permissions: operations,
+        manager_url: "https://manager.example.com",
+        group_token: "test-token",
+        encryption_key: TEST_ENCRYPTION_KEY,
+        image: "registry.example.com/operator:test",
+        log_collector: None,
+        stack_settings: None,
+        project_name: "my-saas",
+        environment_name: None,
+        install_namespace: None,
+        label_domain: None,
+        scope,
+        label_selector: None,
+        permission,
+        format: OperatorOutputFormat::HelmTemplate,
+    })
+    .expect("operator template should render");
+    let files = IndexMap::from([
+        (
+            "Chart.yaml".to_string(),
+            "apiVersion: v2\nname: operator-test\nversion: 0.1.0\n".to_string(),
+        ),
+        (
+            "values.yaml".to_string(),
+            "remoteOperator:\n  serviceAccountAnnotations: {}\nalien:\n  version: test\n"
+                .to_string(),
+        ),
+        ("templates/operator.yaml".to_string(), template),
+    ]);
+    let rendered =
+        test_utils::helm_template_with_api_versions(&files, values, "rel", "ns1", api_versions);
+    rendered.assert_ok("operator chart helm template");
+    parse_manifest(&rendered.stdout)
+}
+
+fn hook_events(doc: &YamlValue) -> Vec<String> {
+    doc["metadata"]["annotations"]["helm.sh/hook"]
+        .as_str()
+        .map(|events| events.split(',').map(str::to_owned).collect())
+        .unwrap_or_default()
+}
+
+fn grants_workload_patch(role: &YamlValue) -> BTreeSet<String> {
+    role["rules"]
+        .as_sequence()
+        .into_iter()
+        .flatten()
+        .filter(|rule| {
+            rule["apiGroups"][0] == "apps"
+                && rule["verbs"]
+                    .as_sequence()
+                    .is_some_and(|verbs| verbs.iter().any(|verb| verb == "patch"))
+        })
+        .flat_map(|rule| rule["resources"].as_sequence().into_iter().flatten())
+        .filter_map(|resource| resource.as_str())
+        .filter(|resource| WORKLOAD_KINDS.contains(resource))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Resources the chart's grant lets the Operator `patch` in the `apps` group. The rule is in a
+/// Role or ClusterRole of the release (inert alone, and removed by a rollback to a chart without
+/// it); it reaches the Operator only through a binding run as a `post-install,post-upgrade,
+/// post-rollback` hook, and a `pre-install,pre-upgrade,pre-rollback,pre-delete` hook of the same
+/// name removes any earlier binding again. No
+/// binding of the release itself may name such a role.
+fn patchable_workloads(docs: &[YamlValue]) -> BTreeSet<String> {
+    let is_role = |doc: &YamlValue| doc["kind"] == "Role" || doc["kind"] == "ClusterRole";
+    let is_binding =
+        |doc: &YamlValue| doc["kind"] == "RoleBinding" || doc["kind"] == "ClusterRoleBinding";
+    // The throwaway probe account (see `restart_probe_hooks`) is the only hook role.
+    let is_probe = |doc: &YamlValue| {
+        doc["metadata"]["name"]
+            .as_str()
+            .is_some_and(|name| name.contains("-probe"))
+    };
+    for role in docs.iter().filter(|doc| is_role(doc) && !is_probe(doc)) {
+        assert!(hook_events(role).is_empty(), "the patch rule is not a hook");
+    }
+    let hook_bindings = |event: &str| -> Vec<&YamlValue> {
+        docs.iter()
+            .filter(|doc| {
+                is_binding(doc) && !is_probe(doc) && hook_events(doc).iter().any(|e| e == event)
+            })
+            .collect()
+    };
+    let install = hook_bindings("post-install");
+    let delete = hook_bindings("pre-delete");
+    for binding in &install {
+        assert_eq!(
+            hook_events(binding),
+            ["post-install", "post-upgrade", "post-rollback"],
+            "the grant is bound after the release objects are applied"
+        );
+        assert_eq!(
+            binding["metadata"]["annotations"]["helm.sh/hook-delete-policy"],
+            "before-hook-creation"
+        );
+    }
+    for binding in &delete {
+        // A binding an earlier revision left behind must be gone before the
+        // Role and the policy are applied again, so the copy also runs before
+        // every install, upgrade and rollback.
+        assert_eq!(
+            hook_events(binding),
+            ["pre-install", "pre-upgrade", "pre-rollback", "pre-delete"],
+            "no binding survives into the apply phase"
+        );
+        assert_eq!(
+            binding["metadata"]["annotations"]["helm.sh/hook-delete-policy"],
+            "before-hook-creation,hook-succeeded"
+        );
+    }
+    let names = |bindings: &[&YamlValue]| -> BTreeSet<String> {
+        bindings
+            .iter()
+            .map(|doc| doc["metadata"]["name"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    assert_eq!(
+        names(&install),
+        names(&delete),
+        "uninstall removes what the hook created"
+    );
+    let bound: BTreeSet<String> = install
+        .iter()
+        .map(|doc| doc["roleRef"]["name"].as_str().unwrap().to_owned())
+        .collect();
+    let mut granted = BTreeSet::new();
+    for role in docs.iter().filter(|doc| is_role(doc) && !is_probe(doc)) {
+        let patch = grants_workload_patch(role);
+        if patch.is_empty() {
+            continue;
+        }
+        assert!(
+            bound.contains(role["metadata"]["name"].as_str().unwrap()),
+            "a release role with a workload patch has a hook binding"
+        );
+        granted.extend(patch);
+    }
+    for binding in docs
+        .iter()
+        .filter(|doc| is_binding(doc) && !is_probe(doc) && hook_events(doc).is_empty())
+    {
+        let role = docs.iter().find(|doc| {
+            is_role(doc)
+                && doc["kind"] == binding["roleRef"]["kind"]
+                && doc["metadata"]["name"] == binding["roleRef"]["name"]
+        });
+        if let Some(role) = role {
+            assert!(
+                grants_workload_patch(role).is_empty(),
+                "a release binding gives the Operator a workload patch"
+            );
+        }
+    }
+    granted
+}
+
+/// Resources a bound policy of the chart limits, and whether every policy has a binding.
+fn restricted_workloads(docs: &[YamlValue]) -> BTreeSet<String> {
+    let policies: Vec<_> = docs
+        .iter()
+        .filter(|doc| doc["kind"] == "ValidatingAdmissionPolicy")
+        .collect();
+    let bindings: BTreeSet<_> = docs
+        .iter()
+        .filter(|doc| doc["kind"] == "ValidatingAdmissionPolicyBinding")
+        .map(|doc| doc["spec"]["policyName"].as_str().unwrap().to_owned())
+        .collect();
+    let names: BTreeSet<_> = policies
+        .iter()
+        .map(|doc| doc["metadata"]["name"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(
+        names, bindings,
+        "every policy needs its binding and the reverse"
+    );
+    policies
+        .iter()
+        .flat_map(|doc| {
+            doc["spec"]["matchConstraints"]["resourceRules"]
+                .as_sequence()
+                .unwrap()
+        })
+        .flat_map(|rule| rule["resources"].as_sequence().unwrap())
+        .map(|resource| resource.as_str().unwrap().to_owned())
+        .collect()
+}
+
+#[test]
+fn workload_patch_is_rendered_if_and_only_if_its_restart_policy_is() {
+    let cases: Vec<Vec<&str>> = vec![
+        vec![],
+        vec!["deployments"],
+        vec!["statefulsets", "daemonsets"],
+        WORKLOAD_KINDS.to_vec(),
+    ];
+    for scope in [OperatorScope::Namespace, OperatorScope::Cluster] {
+        for kinds in &cases {
+            let operations: Vec<_> = (!kinds.is_empty())
+                .then(|| restart_operation(kinds, &[]))
+                .into_iter()
+                .collect();
+            for permission in [
+                OperatorPermission::Diagnostics,
+                OperatorPermission::Remediation,
+            ] {
+                for api_versions in [&[][..], &[POLICY_API][..]] {
+                    let docs =
+                        rendered_operator_chart(scope, permission, &operations, api_versions);
+                    let patched = patchable_workloads(&docs);
+                    let restricted = restricted_workloads(&docs);
+                    let expected: BTreeSet<String> = if permission
+                        == OperatorPermission::Remediation
+                        && !api_versions.is_empty()
+                    {
+                        kinds.iter().map(|kind| (*kind).to_owned()).collect()
+                    } else {
+                        BTreeSet::new()
+                    };
+                    let context =
+                        format!("{scope:?} {kinds:?} {permission:?} api={api_versions:?}");
+                    assert_eq!(patched, expected, "patch rules: {context}");
+                    // The policy also covers Deployments, for the probe Deployment.
+                    let mut covered = expected.clone();
+                    if !covered.is_empty() {
+                        covered.insert("deployments".to_owned());
+                    }
+                    assert_eq!(restricted, covered, "restart policies: {context}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn raw_manifests_never_render_a_workload_patch_or_policy() {
+    let operations = [restart_operation(&WORKLOAD_KINDS, &[])];
+    for scope in [OperatorScope::Namespace, OperatorScope::Cluster] {
+        let manifest = rendered_with_custom(
+            scope,
+            OperatorPermission::Remediation,
+            &operations,
+            OperatorOutputFormat::RawManifest,
+        )
+        .unwrap();
+        let docs = parse_manifest(&manifest);
+        assert!(patchable_workloads(&docs).is_empty());
+        assert!(restricted_workloads(&docs).is_empty());
+    }
+}
+
+#[test]
+fn the_restart_probe_pulls_its_image_with_the_charts_pull_secrets() {
+    let operations = [restart_operation(&["deployments"], &["web"])];
+    let docs = rendered_operator_chart_with_values(
+        OperatorScope::Namespace,
+        OperatorPermission::Remediation,
+        &operations,
+        &[POLICY_API],
+        Some("runtime:\n  imagePullSecrets:\n    - name: regcred\n"),
+    );
+    for kind in ["Job", "Deployment"] {
+        let probes: Vec<_> = docs
+            .iter()
+            .filter(|doc| {
+                doc["kind"] == kind
+                    && doc["metadata"]["name"]
+                        .as_str()
+                        .is_some_and(|name| name.ends_with("-probe"))
+            })
+            .collect();
+        assert_eq!(probes.len(), 1, "one probe {kind}");
+        assert_eq!(
+            probes[0]["spec"]["template"]["spec"]["imagePullSecrets"][0]["name"], "regcred",
+            "probe {kind}"
+        );
+    }
+}
+
+#[test]
+fn restart_policy_admits_only_the_operator_account_restarting_in_its_namespace() {
+    let operations = [restart_operation(&["deployments"], &["web"])];
+    for scope in [OperatorScope::Namespace, OperatorScope::Cluster] {
+        let docs = rendered_operator_chart(
+            scope,
+            OperatorPermission::Remediation,
+            &operations,
+            &[POLICY_API],
+        );
+        let policy = docs
+            .iter()
+            .find(|doc| doc["kind"] == "ValidatingAdmissionPolicy")
+            .expect("a restart policy");
+        let spec = &policy["spec"];
+        assert_eq!(spec["failurePolicy"], "Fail");
+        let rule = &spec["matchConstraints"]["resourceRules"][0];
+        assert_eq!(
+            rule["operations"],
+            serde_yaml::to_value(["UPDATE"]).unwrap()
+        );
+        assert_eq!(rule["apiGroups"], serde_yaml::to_value(["apps"]).unwrap());
+        assert_eq!(
+            rule["resources"],
+            serde_yaml::to_value(["deployments"]).unwrap()
+        );
+        assert_eq!(
+            spec["matchConditions"][0]["expression"],
+            "request.userInfo.username in ['system:serviceaccount:ns1:my-saas-operator', 'system:serviceaccount:ns1:my-saas-operator-restart-c6aa0b61-probe']"
+        );
+        // A standalone Operator has no dynamic workloads to exempt.
+        assert_eq!(spec["matchConditions"].as_sequence().unwrap().len(), 1);
+        let expressions: String = spec["validations"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .map(|validation| validation["expression"].as_str().unwrap())
+            .collect();
+        assert!(expressions.contains("kubectl.kubernetes.io/restartedAt"));
+        assert!(expressions.contains("object.spec.template.spec == oldObject.spec.template.spec"));
+        let binding = docs
+            .iter()
+            .find(|doc| doc["kind"] == "ValidatingAdmissionPolicyBinding")
+            .unwrap();
+        assert_eq!(
+            binding["spec"]["validationActions"],
+            serde_yaml::to_value(["Deny"]).unwrap()
+        );
+        let selector = &binding["spec"]["matchResources"]["namespaceSelector"]["matchLabels"];
+        if scope == OperatorScope::Namespace {
+            assert_eq!(selector["kubernetes.io/metadata.name"], "ns1");
+        } else {
+            assert!(binding["spec"]["matchResources"].is_null());
+        }
+        // The rule keeps its resource name limit.
+        let role = docs
+            .iter()
+            .find(|doc| {
+                (doc["kind"] == "Role" || doc["kind"] == "ClusterRole")
+                    && hook_events(doc).is_empty()
+                    && !grants_workload_patch(doc).is_empty()
+            })
+            .unwrap();
+        let patch_rule = role["rules"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .find(|rule| rule["verbs"] == serde_yaml::to_value(["patch"]).unwrap())
+            .unwrap();
+        assert_eq!(
+            patch_rule["resourceNames"],
+            serde_yaml::to_value(["web"]).unwrap()
+        );
+    }
+}
+
+/// The hooks that prove the policy is enforced before the Operator is bound to its patch rule.
+#[test]
+fn the_probe_runs_before_the_binding_and_names_what_the_policy_matches() {
+    let operations = [restart_operation(&["deployments"], &["web"])];
+    for scope in [OperatorScope::Namespace, OperatorScope::Cluster] {
+        let docs = rendered_operator_chart(
+            scope,
+            OperatorPermission::Remediation,
+            &operations,
+            &[POLICY_API],
+        );
+        let hook = |kind: &str| {
+            docs.iter()
+                .find(|doc| {
+                    doc["kind"] == kind
+                        && doc["metadata"]["namespace"] == "ns1"
+                        && doc["metadata"]["name"]
+                            .as_str()
+                            .is_some_and(|name| name.ends_with("-probe"))
+                })
+                .unwrap_or_else(|| panic!("no probe {kind}"))
+        };
+        // The check counts the API servers from the `kubernetes` EndpointSlice
+        // in `default`: the probe account may get that one object, nothing else
+        // there, and the chart creates nothing in kube-system.
+        assert!(
+            !docs
+                .iter()
+                .any(|doc| doc["metadata"]["namespace"] == "kube-system"
+                    && doc["metadata"]["name"]
+                        .as_str()
+                        .is_some_and(|name| name.ends_with("-probe"))),
+            "the probe needs no grant in kube-system"
+        );
+        let in_default = |kind: &str| {
+            docs.iter()
+                .find(|doc| {
+                    doc["kind"] == kind
+                        && doc["metadata"]["namespace"] == "default"
+                        && doc["metadata"]["name"]
+                            .as_str()
+                            .is_some_and(|name| name.ends_with("-probe-count"))
+                })
+                .unwrap_or_else(|| panic!("no default-namespace probe {kind}"))
+        };
+        assert_eq!(
+            in_default("Role")["rules"],
+            serde_yaml::to_value(vec![serde_yaml::to_value(serde_json::json!({
+                "apiGroups": ["discovery.k8s.io"],
+                "resources": ["endpointslices"],
+                "resourceNames": ["kubernetes"],
+                "verbs": ["get"],
+            }))
+            .unwrap()])
+            .unwrap()
+        );
+        let lease_binding = in_default("RoleBinding");
+        assert_eq!(lease_binding["subjects"][0]["namespace"], "ns1");
+        assert_eq!(lease_binding["roleRef"]["kind"], "Role");
+        assert_eq!(
+            lease_binding["roleRef"]["name"],
+            in_default("Role")["metadata"]["name"]
+        );
+        assert_eq!(
+            in_default("Role")["metadata"]["annotations"]["helm.sh/hook-weight"],
+            "-40"
+        );
+        let weight = |doc: &YamlValue| -> i32 {
+            doc["metadata"]["annotations"]["helm.sh/hook-weight"]
+                .as_str()
+                .unwrap()
+                .parse()
+                .unwrap()
+        };
+        let probe = hook("ServiceAccount")["metadata"]["name"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert!(probe.len() <= 63, "{probe}");
+        // The policy admits the probe account like the Operator's.
+        let policy = docs
+            .iter()
+            .find(|doc| doc["kind"] == "ValidatingAdmissionPolicy")
+            .unwrap();
+        let policy_name = policy["metadata"]["name"].as_str().unwrap();
+        assert!(policy["spec"]["matchConditions"][0]["expression"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("system:serviceaccount:ns1:{probe}")));
+        // The probe account can patch one Deployment, nothing else.
+        let role = hook("Role");
+        assert_eq!(
+            role["rules"],
+            serde_yaml::to_value(vec![serde_yaml::to_value(serde_json::json!({
+                "apiGroups": ["apps"],
+                "resources": ["deployments"],
+                "resourceNames": [probe],
+                "verbs": ["patch"],
+            }))
+            .unwrap()])
+            .unwrap()
+        );
+        assert_eq!(role["metadata"]["namespace"], "ns1");
+        assert_eq!(hook("RoleBinding")["subjects"][0]["name"], probe.as_str());
+        assert_eq!(hook("Deployment")["spec"]["replicas"], 0);
+        let job = hook("Job");
+        let args: Vec<_> = job["spec"]["template"]["spec"]["containers"][0]["args"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .map(|arg| arg.as_str().unwrap().to_owned())
+            .collect();
+        assert_eq!(
+            args,
+            [
+                "verify-workload-patch-policy".to_owned(),
+                "--namespace=ns1".to_owned(),
+                format!("--deployment={probe}"),
+                format!("--policy={policy_name}"),
+            ]
+        );
+        assert_eq!(
+            job["spec"]["template"]["spec"]["serviceAccountName"],
+            probe.as_str()
+        );
+        // A failed probe fails the release (Helm waits for the Job) and leaves its log.
+        assert_eq!(job["spec"]["backoffLimit"], 0);
+        assert!(
+            !job["metadata"]["annotations"]["helm.sh/hook-delete-policy"]
+                .as_str()
+                .unwrap()
+                .contains("hook-failed")
+        );
+        // Order: account objects, Deployment, Job, then the Operator's binding (weight 0).
+        assert!(weight(hook("ServiceAccount")) < weight(hook("Deployment")));
+        assert!(weight(hook("Role")) < weight(hook("Deployment")));
+        assert!(weight(hook("RoleBinding")) < weight(hook("Deployment")));
+        assert!(weight(hook("Deployment")) < weight(job));
+        assert!(weight(job) < 0);
+        let operator_binding = docs
+            .iter()
+            .find(|doc| {
+                doc["kind"]
+                    .as_str()
+                    .is_some_and(|k| k.ends_with("RoleBinding"))
+                    && !doc["metadata"]["name"].as_str().unwrap().contains("-probe")
+                    && hook_events(doc).iter().any(|e| e == "post-install")
+            })
+            .unwrap();
+        assert!(operator_binding["metadata"]["annotations"]["helm.sh/hook-weight"].is_null());
+        // No probe where there is no policy.
+        for (permission, api_versions) in [
+            (OperatorPermission::Diagnostics, &[POLICY_API][..]),
+            (OperatorPermission::Remediation, &[][..]),
+        ] {
+            let docs = rendered_operator_chart(scope, permission, &operations, api_versions);
+            assert!(
+                !docs.iter().any(|doc| doc["metadata"]["name"]
+                    .as_str()
+                    .is_some_and(|name| name.ends_with("-probe"))),
+                "{permission:?} {api_versions:?}"
+            );
+        }
+    }
+}
+
+/// An install whose installer is only an admin of its namespace cannot apply the policy, its
+/// binding (both cluster-scoped) or the probe objects in `default`, and must be able to turn the
+/// feature off and still upgrade. Off, nothing of it is rendered and the Operator gets no
+/// workload `patch`; on (the default, also for a values file carried from an earlier chart that
+/// has no such key), all of it is.
+#[test]
+fn the_restart_policy_can_be_turned_off_and_then_renders_no_cluster_scoped_or_default_objects() {
+    let operations = [restart_operation(&WORKLOAD_KINDS, &[])];
+    let outside_the_namespace = |docs: &[YamlValue]| -> Vec<String> {
+        docs.iter()
+            .filter(|doc| {
+                let kind = doc["kind"].as_str().unwrap_or_default();
+                let namespace = doc["metadata"]["namespace"].as_str();
+                namespace == Some("default") || kind.starts_with("ValidatingAdmissionPolicy")
+            })
+            .map(|doc| {
+                format!(
+                    "{}/{}",
+                    doc["kind"].as_str().unwrap_or_default(),
+                    doc["metadata"]["name"].as_str().unwrap_or_default()
+                )
+            })
+            .collect()
+    };
+    for scope in [OperatorScope::Namespace, OperatorScope::Cluster] {
+        for values in [None, Some("runtime:\n  workloadRestartPolicy: true\n")] {
+            let docs = rendered_operator_chart_with_values(
+                scope,
+                OperatorPermission::Remediation,
+                &operations,
+                &[POLICY_API],
+                values,
+            );
+            assert!(
+                !outside_the_namespace(&docs).is_empty(),
+                "{scope:?}: the default renders the policy"
+            );
+            assert!(!patchable_workloads(&docs).is_empty(), "{scope:?}");
+        }
+        let docs = rendered_operator_chart_with_values(
+            scope,
+            OperatorPermission::Remediation,
+            &operations,
+            &[POLICY_API],
+            Some("runtime:\n  workloadRestartPolicy: false\n"),
+        );
+        assert_eq!(
+            outside_the_namespace(&docs),
+            Vec::<String>::new(),
+            "{scope:?}"
+        );
+        assert!(
+            patchable_workloads(&docs).is_empty(),
+            "{scope:?}: no patch rule"
+        );
+        assert!(
+            restricted_workloads(&docs).is_empty(),
+            "{scope:?}: no policy"
+        );
+        assert!(
+            docs.iter().all(|doc| doc["kind"] != "Job"
+                || !doc["metadata"]["name"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("-probe")),
+            "{scope:?}: no probe"
+        );
+    }
+}

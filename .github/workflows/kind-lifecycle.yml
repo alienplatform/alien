@@ -98,6 +98,9 @@ jobs:
           cargo test --locked -p alien-helm --test product_remote_operator_lifecycle --no-run
           cargo test --locked -p alien-helm --test sandbox_allow_egress_kind --no-run
           cargo test --locked -p alien-helm --test sandbox_rbac_kind --no-run
+          cargo test --locked -p alien-helm --test workload_restart_kind --no-run
+          cargo test --locked -p alien-helm --lib --no-run
+          cargo build --locked -p alien-operator
           cargo test --locked -p alien-infra --features all-platforms --lib kubernetes_broker_kind --no-run
           cargo test --locked -p alien-manager --lib kind_ --no-run
           cargo test --locked -p alien-infra --features all-platforms --test kubernetes_service_account_refresh_kind --no-run
@@ -248,6 +251,29 @@ jobs:
             done
             exit 1
           fi
+
+      - name: Workload restart policy on a real API server
+        env:
+          ALIEN_WORKLOAD_RESTART_KIND_CONTEXT: kind-alien-product-lifecycle
+          ALIEN_WORKLOAD_RESTART_OPERATOR_IMAGE: alien-operator:kind-test
+          ALIEN_WORKLOAD_RESTART_FAILING_IMAGE: alien-operator:kind-failing
+        run: |
+          # The chart's verification Job runs `alien-operator verify-workload-patch-policy`. Build
+          # an image of this checkout's binary, and one whose entry point fails (a cluster that
+          # does not enforce the policy).
+          image_dir="$(mktemp -d)"
+          strip --strip-debug -o "$image_dir/alien-operator" target/debug/alien-operator
+          printf 'FROM ubuntu:24.04\nCOPY alien-operator /usr/local/bin/alien-operator\nUSER 1000\nENTRYPOINT ["/usr/local/bin/alien-operator"]\n' > "$image_dir/Dockerfile"
+          printf 'FROM ubuntu:24.04\nUSER 1000\nENTRYPOINT ["/bin/false"]\n' > "$image_dir/Dockerfile.failing"
+          docker build -t alien-operator:kind-test "$image_dir"
+          docker build -f "$image_dir/Dockerfile.failing" -t alien-operator:kind-failing "$image_dir"
+          kind load docker-image alien-operator:kind-test alien-operator:kind-failing --name alien-product-lifecycle
+          cargo test --locked -p alien-helm --test workload_restart_kind -- \
+            --ignored --nocapture --test-threads=1 \
+            the_cluster_admits a_cluster_wide a_namespaced the_grant_never a_failed_probe
+          cargo test --locked -p alien-helm --lib -- \
+            --ignored --nocapture --test-threads=1 \
+            product_chart_operator_updates
 
       - name: Kubernetes sandbox sessions on a real API server
         env:

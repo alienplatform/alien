@@ -84,6 +84,14 @@ runtime:
     # a different key here than the one in use stops the install.
     key: ""
   replicas: 1
+  # Renders the cluster-enforced restart: the admission policy that limits the Operator's
+  # workload `patch` to a restart, the probe that proves the cluster enforces it before the grant
+  # exists, and the grant itself. They are cluster-scoped objects (a ValidatingAdmissionPolicy and
+  # its binding) plus a Role and Job objects in `default`, so an installer that is only an admin of
+  # the install namespace cannot apply them. Set false for such an install: nothing of it is
+  # rendered, the Operator gets no workload `patch`, and a restart operation is refused with an
+  # error saying it is not available. Applies only to a chart that grants a restart.
+  workloadRestartPolicy: true
   resources:
     requests:
       cpu: 100m
@@ -448,6 +456,7 @@ postgres: {}
             "properties": { "name": { "type": "string", "minLength": 1 } }
           }
         },
+        "workloadRestartPolicy": { "type": "boolean" },
         "podLabels": {
           "type": "object",
           "propertyNames": { "not": { "enum": ["app.kubernetes.io/name", "app.kubernetes.io/instance", "alien.dev/log-collector-exclude"] } },
