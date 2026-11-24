@@ -12,7 +12,7 @@
 //!
 //! Env: `GCP_PROJECT`, `GCP_REGION`, `GCP_ENGINE` (bare id), `GCP_IMAGE`, `GCP_PREVIEW_SA`,
 //! `GCP_OWNER_TOKEN`, `GCP_ADMIN_TOKEN`, `GCP_NOEXEC_SA`, `GCP_NOEXEC_TOKEN`. Optional:
-//! `GCP_PREVIEW_PORTS` (default `8080,8081,8090`), `GCP_DAEMON_TOKEN` (the fixture's bearer).
+//! `GCP_INTERNET=1` (give the template internet egress; default off), `GCP_PREVIEW_PORTS` (default `8080,8081,8090`), `GCP_DAEMON_TOKEN` (the fixture's bearer).
 //!
 //! Two tests, each run by its exact name, because they need different images:
 //!
@@ -409,7 +409,7 @@ impl Live {
                         extra: Default::default(),
                     }),
                     egress_control_config: Some(EgressControlConfig {
-                        internet_access: Some(false),
+                        internet_access: Some(std::env::var("GCP_INTERNET").is_ok_and(|v| v == "1")),
                         network_attachment: None,
                         extra: Default::default(),
                     }),

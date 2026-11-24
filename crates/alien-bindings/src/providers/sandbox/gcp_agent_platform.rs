@@ -281,18 +281,81 @@ const EDGE_REFRESH_MARGIN_SECONDS: i64 = 60;
 /// port, the same three headers preview sends.
 struct GcpEdgeAgent {
     http: reqwest::Client,
+    /// Read again with each new credential: the routing token is short-lived.
+    client: Arc<dyn AgentPlatformApi>,
+    engine: String,
+    sandbox_id: String,
+    /// `address:port` of the private endpoint, when the template has one (plain HTTP).
+    private_endpoint: Option<String>,
+    signer: Arc<dyn EdgeTokenSigner>,
+    /// The target in use, kept until shortly before the credential ends.
+    edge: tokio::sync::Mutex<Option<EdgeTarget>>,
+}
+
+/// What one edge request needs, valid until `expires_at` (the edge credential's end).
+#[derive(Clone)]
+struct EdgeTarget {
     /// Scheme and authority, no trailing slash.
     base: String,
     routing_token: String,
-    signer: Arc<dyn EdgeTokenSigner>,
-    /// The credential in use and when it ends, kept until shortly before.
-    edge: tokio::sync::Mutex<Option<(String, i64)>>,
+    jwt: String,
+    expires_at: i64,
+}
+
+impl GcpEdgeAgent {
+    /// Where to send a request and with what: the credential signed again, and the host and
+    /// routing token read again, once less than the refresh margin is left.
+    async fn target(&self) -> Result<EdgeTarget> {
+        let mut edge = self.edge.lock().await;
+        let now = chrono::Utc::now().timestamp();
+        if let Some(target) = edge.as_ref() {
+            if target.expires_at - now > EDGE_REFRESH_MARGIN_SECONDS {
+                return Ok(target.clone());
+            }
+        }
+        let unreachable = |reason: &str| {
+            AlienError::new(ErrorData::SandboxUnreachable {
+                operation: super::agent_protocol::RUN_INTERACTIVE.to_string(),
+                reason: reason.to_string(),
+            })
+        };
+        let sandbox = self
+            .client
+            .get_sandbox(&self.engine, &self.sandbox_id)
+            .await
+            .context(ErrorData::SandboxUnreachable {
+                operation: super::agent_protocol::RUN_INTERACTIVE.to_string(),
+                reason: "the Agent Platform API did not answer a sandbox read".to_string(),
+            })?;
+        let connection = sandbox.connection_info.as_ref();
+        let base = match &self.private_endpoint {
+            Some(endpoint) => format!("http://{endpoint}"),
+            None => format!(
+                "https://{}",
+                connection
+                    .and_then(|info| info.load_balancer_hostname.clone())
+                    .ok_or_else(|| unreachable("the sandbox has no edge host yet"))?
+            ),
+        };
+        let routing_token = connection
+            .and_then(|info| info.routing_token.clone())
+            .ok_or_else(|| unreachable("the sandbox has no routing token yet"))?;
+        let signed = self.signer.sign().await?;
+        let target = EdgeTarget {
+            base,
+            routing_token,
+            jwt: signed.jwt,
+            expires_at: signed.expires_at,
+        };
+        *edge = Some(target.clone());
+        Ok(target)
+    }
 }
 
 impl std::fmt::Debug for GcpEdgeAgent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("GcpEdgeAgent")
-            .field("base", &self.base)
+            .field("sandbox_id", &self.sandbox_id)
             .finish_non_exhaustive()
     }
 }
@@ -304,25 +367,12 @@ impl super::interactive::BoundAgent for GcpEdgeAgent {
         method: reqwest::Method,
         path: &str,
     ) -> Result<reqwest::RequestBuilder> {
-        let jwt = {
-            let mut edge = self.edge.lock().await;
-            let now = chrono::Utc::now().timestamp();
-            match edge.as_ref() {
-                Some((jwt, expires_at)) if expires_at - now > EDGE_REFRESH_MARGIN_SECONDS => {
-                    jwt.clone()
-                }
-                _ => {
-                    let signed = self.signer.sign().await?;
-                    *edge = Some((signed.jwt.clone(), signed.expires_at));
-                    signed.jwt
-                }
-            }
-        };
+        let target = self.target().await?;
         Ok(self
             .http
-            .request(method, format!("{}{path}", self.base))
-            .bearer_auth(jwt)
-            .header("X-Sandbox-Routing-Token", &self.routing_token)
+            .request(method, format!("{}{path}", target.base))
+            .bearer_auth(target.jwt)
+            .header("X-Sandbox-Routing-Token", target.routing_token)
             .header(
                 "X-Sandbox-Port",
                 alien_core::sandbox_image::AGENT_PORT.to_string(),
@@ -2071,31 +2121,20 @@ impl Sandbox for GcpAgentPlatformSandbox {
                 reason: reason.to_string(),
             })
         };
-        let sandbox = self
-            .read_sandbox(RUN_INTERACTIVE, sandbox_id)
-            .await?
-            .ok_or_else(|| unreachable("the sandbox does not exist"))?;
-        let connection = sandbox.connection_info.as_ref();
-        let base = match &self.private_endpoint {
-            Some(endpoint) => format!("http://{endpoint}"),
-            None => format!(
-                "https://{}",
-                connection
-                    .and_then(|info| info.load_balancer_hostname.clone())
-                    .ok_or_else(|| unreachable("the sandbox has no edge host yet"))?
-            ),
-        };
-        let routing_token = connection
-            .and_then(|info| info.routing_token.clone())
-            .ok_or_else(|| unreachable("the sandbox has no routing token yet"))?;
-
         let agent = Arc::new(GcpEdgeAgent {
             http: self.edge_http.clone(),
-            base,
-            routing_token,
+            client: Arc::clone(&self.client),
+            engine: self.engine.clone(),
+            sandbox_id: sandbox_id.to_string(),
+            private_endpoint: self.private_endpoint.clone(),
             signer: Arc::clone(signer),
             edge: tokio::sync::Mutex::new(None),
         });
+        // A sandbox that does not exist is refused before the command starts; its edge host and
+        // routing token are read with each credential.
+        self.read_sandbox(RUN_INTERACTIVE, sandbox_id)
+            .await?
+            .ok_or_else(|| unreachable("the sandbox does not exist"))?;
         super::interactive::run_interactive(agent, request).await
     }
 

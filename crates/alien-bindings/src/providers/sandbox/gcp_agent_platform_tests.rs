@@ -4938,3 +4938,37 @@ async fn run_interactive_reuses_an_edge_credential_just_outside_the_renewal_marg
         );
     }
 }
+
+/// The routing token is short-lived: a command that outlives it must send the token the sandbox
+/// reports now, not the one it started with.
+#[tokio::test]
+async fn run_interactive_reads_the_routing_token_again_with_each_credential() {
+    let (address, seen) = loopback_edge::serve().await;
+    let reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let mut client = MockAgentPlatformApi::new();
+    let counter = Arc::clone(&reads);
+    client.expect_get_sandbox().returning(move |_, id| {
+        let n = counter.fetch_add(1, Ordering::SeqCst);
+        let mut sandbox = running_with_route(id, &far_future());
+        if let Some(info) = sandbox.connection_info.as_mut() {
+            info.routing_token = Some(format!("route-{n}"));
+        }
+        Ok(sandbox)
+    });
+    // Every credential is already inside the renewal margin, so every request signs and reads.
+    let provider = provider(client)
+        .with_preview_signer(Arc::new(FixedSigner::living(30)))
+        .with_private_endpoint(address);
+    let command = provider
+        .run_interactive("s1", interactive_request())
+        .await
+        .expect("the stream opens");
+    command.input.write(b"abc").await.expect("write");
+    let seen = seen.lock().unwrap();
+    let tokens: Vec<_> = seen
+        .iter()
+        .map(|(_, h)| h["x-sandbox-routing-token"].to_str().unwrap().to_string())
+        .collect();
+    assert_eq!(tokens.len(), 2);
+    assert_ne!(tokens[0], tokens[1], "the write carries a fresh token");
+}
