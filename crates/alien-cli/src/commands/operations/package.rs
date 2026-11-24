@@ -306,7 +306,9 @@ fn write_bundle(
     let metadata_options = SimpleFileOptions::default();
     // Binaries need the executable bit inside the ZIP so the loader can run
     // them directly after extraction, without a separate chmod step.
-    let binary_options = SimpleFileOptions::default().unix_permissions(0o755);
+    let binary_options = SimpleFileOptions::default()
+        .unix_permissions(0o755)
+        .system(zip::System::Unix);
 
     archive
         .start_file(
@@ -377,7 +379,10 @@ mod tests {
         let bytes = std::fs::read(&bundle_path).expect("read bundle");
         let mut archive =
             zip::ZipArchive::new(std::io::Cursor::new(bytes)).expect("open bundle as zip");
-        let names: Vec<_> = archive.file_names().map(str::to_string).collect();
+        let names: Vec<_> = archive
+            .file_names()
+            .map(|n| n.expect("utf-8 name").to_string())
+            .collect();
         assert!(names.contains(&"metadata.json".to_string()));
         assert!(names.contains(&"demo-linux-amd64".to_string()));
 
