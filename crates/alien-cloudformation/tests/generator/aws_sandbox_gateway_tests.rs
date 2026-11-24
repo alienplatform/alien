@@ -289,7 +289,10 @@ fn an_internet_sandbox_without_its_gateway_is_refused() {
 #[tokio::test]
 async fn a_legacy_sandbox_setup_template_has_no_gateway() {
     for shape in [Shape::SandboxOnly, Shape::SandboxAndContainer] {
-        for egress in [SandboxEgress::None, SandboxEgress::None] {
+        for egress in [
+            SandboxEgress::None,
+            SandboxEgress::Removed(alien_core::RemovedSandboxEgress::Allow),
+        ] {
             let settings = settings();
             let prepared =
                 prepare_for_setup_template(stack(shape, egress.clone()), &settings).await;

@@ -22,7 +22,6 @@ pub enum DirectSetup {
 
 /// Items the Google Cloud sandbox emitter produces, keyed by what each one is for.
 pub const GCP_SANDBOX_ITEMS: &[(&str, DirectSetup)] = &[
-    ("engine-grant:access", DirectSetup::Creates),
     ("engine-grant:templates", DirectSetup::Creates),
     ("engine-grant:preview", DirectSetup::Creates),
     ("preview-signer-account", DirectSetup::Creates),

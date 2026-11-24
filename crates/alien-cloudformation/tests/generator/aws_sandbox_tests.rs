@@ -274,7 +274,7 @@ fn a_live_sandbox_ships_its_build_role_but_not_its_image() {
 fn a_declared_private_base_is_the_only_repository_a_live_build_pulls() {
     let (stack, settings) = sandbox_stack_with_lifecycle(
         "acme-sandbox-live-base",
-        SandboxEgress::None,
+        SandboxEgress::Removed(alien_core::RemovedSandboxEgress::Allow),
         ResourceLifecycle::Live,
     );
     let mut stack = stack;
@@ -434,7 +434,10 @@ fn a_frozen_sandbox_still_bakes_its_image_into_the_setup_stack() {
 fn an_open_live_sandbox_ships_only_the_build_role() {
     let stack = Stack::new("acme-sandbox-open-live".to_string())
         .add(
-            sandbox_fixture_with(SandboxEgress::None, LIVE_BUNDLE),
+            sandbox_fixture_with(
+                SandboxEgress::Removed(alien_core::RemovedSandboxEgress::Allow),
+                LIVE_BUNDLE,
+            ),
             ResourceLifecycle::Live,
         )
         .build();
@@ -678,7 +681,9 @@ fn aws_sandbox_refuses_to_render_without_a_network_to_attach_to() {
 fn aws_sandbox_allowing_egress_builds_no_connector() {
     let stack = Stack::new("acme-sandbox-open".to_string())
         .add(
-            sandbox_fixture(SandboxEgress::None),
+            sandbox_fixture(SandboxEgress::Removed(
+                alien_core::RemovedSandboxEgress::Allow,
+            )),
             ResourceLifecycle::Frozen,
         )
         .build();
@@ -829,7 +834,7 @@ fn the_sandbox_templates_render_whole() {
         ),
         (
             "sandbox_open_aws",
-            SandboxEgress::None,
+            SandboxEgress::Removed(alien_core::RemovedSandboxEgress::Allow),
             CloudFormationTarget::Aws,
             "aws",
         ),
@@ -873,7 +878,9 @@ fn the_sandbox_templates_render_whole() {
 fn aws_remote_sandbox_grants_the_access_identity_its_own_image_and_nothing_wider() {
     let stack = Stack::new("byo-sandbox".to_string())
         .add_with_remote_access(
-            sandbox_fixture(SandboxEgress::None),
+            sandbox_fixture(SandboxEgress::Removed(
+                alien_core::RemovedSandboxEgress::Allow,
+            )),
             ResourceLifecycle::Frozen,
         )
         .add(
@@ -1020,7 +1027,9 @@ fn aws_remote_sandbox_management_role_heartbeats_without_reaching_a_session() {
                 .global(["sandbox/heartbeat", "sandbox/management"]),
         ))
         .add_with_remote_access(
-            sandbox_fixture(SandboxEgress::None),
+            sandbox_fixture(SandboxEgress::Removed(
+                alien_core::RemovedSandboxEgress::Allow,
+            )),
             ResourceLifecycle::Frozen,
         )
         .add(
@@ -1270,7 +1279,10 @@ fn aws_remote_storage_management_role_keeps_its_heartbeat() {
 fn aws_remote_sandbox_grants_a_live_sandbox_the_same_execute_set() {
     let stack = Stack::new("byo-sandbox".to_string())
         .add_with_remote_access(
-            sandbox_fixture_with(SandboxEgress::None, LIVE_BUNDLE),
+            sandbox_fixture_with(
+                SandboxEgress::Removed(alien_core::RemovedSandboxEgress::Allow),
+                LIVE_BUNDLE,
+            ),
             ResourceLifecycle::Live,
         )
         .add(
@@ -1425,7 +1437,10 @@ fn the_emitted_build_role_matches_the_shared_policy_builder() {
             .add(
                 Sandbox {
                     private_base_image: private_base_image.map(str::to_string),
-                    ..sandbox_fixture_with(SandboxEgress::None, bundle_uri)
+                    ..sandbox_fixture_with(
+                        SandboxEgress::Removed(alien_core::RemovedSandboxEgress::Allow),
+                        bundle_uri,
+                    )
                 },
                 lifecycle,
             )
@@ -1868,7 +1883,7 @@ fn the_emitted_registration_matches_the_direct_seed() {
     let supervised = Some(SandboxPrivilegedSupervisor { command_uid: 60001 });
     for (egress, privileged_supervisor, bundle_uri) in [
         (
-            SandboxEgress::None,
+            SandboxEgress::Removed(alien_core::RemovedSandboxEgress::Allow),
             None,
             "s3://acme-artifacts-{region}/sandbox-bundle/f00dcafe/bundle.zip",
         ),
@@ -1880,7 +1895,11 @@ fn the_emitted_registration_matches_the_direct_seed() {
         ),
         // The agent enforces these in the guest, so the cloud side sees open egress. A registration
         // that read the declared egress instead refused this sandbox on direct deployments only.
-        (SandboxEgress::None, supervised.clone(), LIVE_BUNDLE),
+        (
+            SandboxEgress::Removed(alien_core::RemovedSandboxEgress::Allow),
+            supervised.clone(),
+            LIVE_BUNDLE,
+        ),
         (SandboxEgress::None, supervised.clone(), LIVE_BUNDLE),
     ] {
         let sandbox = Sandbox {
@@ -2284,7 +2303,7 @@ async fn the_bundle_bucket_and_its_guards_render_under_both_setup_modes() {
         let stack = Stack::new("acme-bundles".to_string())
             .add(
                 sandbox_fixture_with(
-                    SandboxEgress::None,
+                    SandboxEgress::Removed(alien_core::RemovedSandboxEgress::Allow),
                     "210987654321.dkr.ecr.us-east-1.amazonaws.com/acme/agents@sha256:f00d",
                 ),
                 ResourceLifecycle::Live,

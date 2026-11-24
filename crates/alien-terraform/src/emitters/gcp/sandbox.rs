@@ -1,8 +1,7 @@
 //! GCP Agent Platform sandbox emitter.
 //!
-//! The template is release-owned, so setup emits only engine-scoped grants: the remote grant and,
-//! on a Frozen sandbox, the manager's template verbs. Domain-scoped egress is refused here, since
-//! the single internet-access switch cannot express a hostname list.
+//! The template is release-owned, so setup emits only engine-scoped grants: on a Frozen sandbox,
+//! the manager's template verbs.
 
 use crate::{
     block::{attr, block, nested, resource_block},
@@ -122,7 +121,6 @@ impl TfEmitter for GcpAgentPlatformSandboxEmitter {
         // The environment template is release-owned: a new image replaces it, so it belongs to the
         // controller under either lifecycle. Only its engine is ever a setup resource.
         let mut fragment = TfFragment::default();
-        emit_remote_access(ctx, &mut fragment)?;
         emit_template_management(ctx, &mut fragment)?;
         emit_preview_signer(ctx, &mut fragment)?;
         Ok(fragment)
@@ -179,36 +177,6 @@ impl TfEmitter for GcpAgentPlatformSandboxEmitter {
 
         Ok(Some(expr::object(fields)))
     }
-}
-
-/// Attaches this sandbox's remote grant to the stack's shared Remote Bindings identity, scoped to
-/// the engine and nothing wider: engine IAM covers only the sessions under it, while GCP's only
-/// wider scope is the whole project — every sibling sandbox in the deployment.
-fn emit_remote_access(ctx: &EmitContext<'_>, fragment: &mut TfFragment) -> Result<()> {
-    let (Some(definition), Some(access_label)) = (
-        alien_core::remote_bindings::remote_binding_is_deliverable(ctx.resource)
-            .then(|| alien_core::remote_bindings::remote_binding_for_entry(ctx.resource))
-            .flatten(),
-        remote_bindings_label(ctx),
-    ) else {
-        return Ok(());
-    };
-    if ctx.resource.lifecycle != ResourceLifecycle::Frozen {
-        return Err(AlienError::new(ErrorData::OperationNotSupported {
-            operation: format!("terraform publish sandbox '{}' remotely", ctx.resource_id),
-            reason: "GCP refuses an IAM binding on a reasoning engine that does not exist yet, \
-                     and a Live engine is created by its controller after apply. Declare the \
-                     sandbox as frozen"
-                .to_string(),
-        }));
-    }
-    emit_engine_grant(
-        ctx,
-        fragment,
-        definition.permission_set,
-        access_label,
-        "access",
-    )
 }
 
 /// Whether the stack grants its management identity `sandbox/templates` on this Frozen sandbox,
@@ -659,14 +627,6 @@ fn execute_owner_labels(ctx: &EmitContext<'_>) -> Vec<String> {
     owners
 }
 
-fn remote_bindings_label<'a>(ctx: &'a EmitContext<'_>) -> Option<&'a str> {
-    ctx.stack.resources().find_map(|(id, entry)| {
-        (entry.config.resource_type() == RemoteBindings::RESOURCE_TYPE)
-            .then(|| ctx.name_for(id))
-            .flatten()
-    })
-}
-
 #[cfg(test)]
 mod tests {
     mod agent_platform {
@@ -775,57 +735,6 @@ mod tests {
         fn attribute(block: &hcl::structure::Block, key: &str) -> String {
             attribute_opt(block, key)
                 .unwrap_or_else(|| panic!("the block carries no '{key}': {block:?}"))
-        }
-
-        /// The grant names the engine by reading the created block's server-assigned `name` — a
-        /// name derived from the setup label would be a scope no engine answers to, so the caller
-        /// would hold no session access at all while `PERMISSIONS.md` still advertised the grant.
-        #[test]
-        fn the_engine_grant_references_the_created_engine() {
-            let stack = stack_with(SandboxEgress::None, None, ResourceLifecycle::Frozen, true);
-            let fragment = with_context(&stack, |ctx| {
-                GcpAgentPlatformSandboxEmitter
-                    .emit(ctx)
-                    .expect("a frozen remote sandbox renders its grant")
-            });
-
-            let member = fragment
-                .resource_blocks
-                .iter()
-                .find(|block| {
-                    block.labels.first().map(|label| label.as_str())
-                        == Some("google_vertex_ai_reasoning_engine_iam_member")
-                })
-                .expect("the remote grant renders an engine-scoped IAM member");
-            assert_eq!(
-                attribute(member, "reasoning_engine"),
-                format!("{ENGINE_RESOURCE}.agents_engine.name")
-            );
-            assert_eq!(attribute(member, "provider"), "google-beta");
-            assert_eq!(
-                attribute(member, "member"),
-                "\"serviceAccount:${google_service_account.access.email}\""
-            );
-            // The role is the generated custom one, not a predefined role: every predefined role
-            // carrying the execute verb carries the rest of Vertex AI with it.
-            assert!(
-                attribute(member, "role").contains("google_project_iam_custom_role"),
-                "{member:?}"
-            );
-
-            // A sandbox nobody published gets no engine grant, whatever else the stack declares.
-            let unpublished =
-                stack_with(SandboxEgress::None, None, ResourceLifecycle::Frozen, false);
-            let fragment = with_context(&unpublished, |ctx| {
-                GcpAgentPlatformSandboxEmitter.emit(ctx).expect("renders")
-            });
-            assert!(
-                !fragment.resource_blocks.iter().any(|block| {
-                    block.labels.first().map(|l| l.as_str())
-                        == Some("google_vertex_ai_reasoning_engine_iam_member")
-                }),
-                "{fragment:?}"
-            );
         }
 
         /// The engine grant follows the profile: one member when `sandbox/templates` is granted on
@@ -1416,7 +1325,10 @@ mod tests {
                     );
                 let builder = if remote_access {
                     builder.add_with_remote_access(
-                        base.egress(SandboxEgress::None).build(),
+                        base.egress(SandboxEgress::Removed(
+                            alien_core::RemovedSandboxEgress::Allow,
+                        ))
+                        .build(),
                         ResourceLifecycle::Frozen,
                     )
                 } else {
@@ -1511,24 +1423,6 @@ mod tests {
                 pending.is_empty(),
                 "a Pending item has no controller test yet: {pending:?}"
             );
-        }
-
-        /// GCP refuses an IAM binding whose engine does not exist yet, and a Live engine is created
-        /// by its controller after apply. Emitting the member anyway would reference a block this
-        /// template never renders.
-        #[test]
-        fn a_live_remote_sandbox_is_refused_naming_the_lifecycle() {
-            let stack = stack_with(SandboxEgress::None, None, ResourceLifecycle::Live, true);
-            let error = with_context(&stack, |ctx| {
-                GcpAgentPlatformSandboxEmitter
-                    .emit(ctx)
-                    .expect_err("a Live engine has no scope a grant can name")
-            });
-
-            assert_eq!(error.code, "OPERATION_NOT_SUPPORTED", "{error}");
-            let rendered = error.to_string();
-            assert!(rendered.contains("agents"), "names the sandbox: {rendered}");
-            assert!(rendered.contains("frozen"), "names the fix: {rendered}");
         }
 
         /// An `internet` sandbox answers only through its private endpoint, to the edge credential

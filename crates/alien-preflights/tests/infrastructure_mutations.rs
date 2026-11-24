@@ -366,7 +366,9 @@ async fn an_azure_sandbox_only_stack_depends_only_on_resources_it_defines() {
             image: "ubuntu".to_string(),
             bundled_from: None,
         })
-        .egress(alien_core::SandboxEgress::Removed(alien_core::RemovedSandboxEgress::Allow))
+        .egress(alien_core::SandboxEgress::Removed(
+            alien_core::RemovedSandboxEgress::Allow,
+        ))
         .lifecycle(alien_core::SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
             idle_pause_seconds: Some(1800),

@@ -8,9 +8,7 @@
 
 use crate::error::Result;
 use crate::{CheckResult, CompileTimeCheck};
-use alien_core::{
-    CloudEgressRoute, NetworkSettings, Platform, ResourceEntry, Sandbox, Stack,
-};
+use alien_core::{CloudEgressRoute, NetworkSettings, Platform, ResourceEntry, Sandbox, Stack};
 
 /// Resource types that require VPC networking on cloud platforms.
 ///
@@ -484,10 +482,7 @@ mod tests {
 
     #[test]
     fn a_sandbox_requires_a_network_when_its_egress_needs_a_connector() {
-        for (egress, expected) in [
-            (SandboxEgress::None, true),
-            (SandboxEgress::Internet, true),
-        ] {
+        for (egress, expected) in [(SandboxEgress::None, true), (SandboxEgress::Internet, true)] {
             for supervisor in [false, true] {
                 let mut entry = create_sandbox_entry(egress.clone());
                 if supervisor {

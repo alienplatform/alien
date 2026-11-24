@@ -547,10 +547,7 @@ mod tests {
     /// names the declaration, and non-root images are unaffected by egress mode.
     #[tokio::test]
     async fn kubernetes_root_boot_needs_internet_or_none_egress() {
-        for (egress, root_ok) in [
-            (SandboxEgress::Internet, true),
-            (SandboxEgress::None, true),
-        ] {
+        for (egress, root_ok) in [(SandboxEgress::Internet, true), (SandboxEgress::None, true)] {
             for user in [None, Some(0), Some(2001)] {
                 let mut value = sandbox("boot", None, egress.clone());
                 value.image_user = user;
@@ -780,7 +777,12 @@ mod tests {
                 domains: vec!["example.com".into()],
             },
         ] {
-            for platform in [Platform::Aws, Platform::Gcp, Platform::Azure, Platform::Local] {
+            for platform in [
+                Platform::Aws,
+                Platform::Gcp,
+                Platform::Azure,
+                Platform::Local,
+            ] {
                 let egress = SandboxEgress::Removed(removed.clone());
                 let result = SandboxPlatformSupportCheck
                     .check(&stack_with(sandbox("agents", None, egress)), platform)
@@ -789,7 +791,7 @@ mod tests {
                 assert!(!result.success, "{removed:?} {platform:?}");
                 let errors = result.errors.join(" ");
                 assert!(
-                    errors.contains("SANDBOX_EGRESS_MODE_REMOVED")
+                    errors.contains("was removed")
                         && errors.contains("internet")
                         && errors.contains("'agents'"),
                     "{removed:?} {platform:?}: {errors}"

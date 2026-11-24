@@ -16,8 +16,7 @@
 use crate::emitter::{HelmEmitter, HelmFragment};
 use alien_core::sandbox_image::AGENT_PORT;
 use alien_core::{
-    import::EmitContext, ErrorData, ResourceRef, Result, Sandbox,
-    SandboxEgress, Stack,
+    import::EmitContext, ErrorData, ResourceRef, Result, Sandbox, SandboxEgress, Stack,
 };
 use alien_error::AlienError;
 

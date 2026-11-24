@@ -788,36 +788,27 @@ mod tests {
         );
     }
 
-    /// A remote sandbox must allow egress, so the deny fixture is the one without remote access.
-    fn frozen_gcp_sandbox(image: &str, remote: bool) -> Stack {
+    fn frozen_gcp_sandbox(image: &str) -> Stack {
         let sandbox = Sandbox::new("agents".to_string())
             .code(SandboxCode::Image {
                 image: image.to_string(),
                 bundled_from: None,
             })
-            .egress(if remote {
-                SandboxEgress::None
-            } else {
-                SandboxEgress::None
-            })
+            .egress(SandboxEgress::None)
             .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: Some(3600),
                 idle_pause_seconds: None,
                 ..Default::default()
             })
             .build();
-        let stack = Stack::new("agents-stack".to_string());
-        if remote {
-            stack.add_with_remote_access(sandbox, ResourceLifecycle::Frozen)
-        } else {
-            stack.add(sandbox, ResourceLifecycle::Frozen)
-        }
-        .build()
+        Stack::new("agents-stack".to_string())
+            .add(sandbox, ResourceLifecycle::Frozen)
+            .build()
     }
 
-    async fn render_gcp(image: &str, remote: bool) -> (Stack, Vec<(String, String)>) {
+    async fn render_gcp(image: &str) -> (Stack, Vec<(String, String)>) {
         let stack = prepare_stack_for_render(
-            frozen_gcp_sandbox(image, remote),
+            frozen_gcp_sandbox(image),
             Platform::Gcp,
             None,
             &StackSettings::default(),
@@ -858,8 +849,8 @@ mod tests {
             "ghcr.io/org/sandbox:v2",
             "python:3.12",
         ];
-        for remote in [true, false] {
-            let (baseline, baseline_module) = render_gcp(images[0], remote).await;
+        {
+            let (baseline, baseline_module) = render_gcp(images[0]).await;
             let rendered = baseline_module
                 .iter()
                 .map(|(_, body)| body.as_str())
@@ -871,7 +862,7 @@ mod tests {
             assert!(!rendered.contains("docker.pkg.dev"), "{rendered}");
 
             for image in &images[1..] {
-                let (target, module) = render_gcp(image, remote).await;
+                let (target, module) = render_gcp(image).await;
                 assert_eq!(module.len(), baseline_module.len());
                 for ((path, body), (_, baseline_body)) in module.iter().zip(&baseline_module) {
                     let first_difference = body
@@ -880,8 +871,7 @@ mod tests {
                         .find(|(line, baseline_line)| line != baseline_line);
                     assert!(
                         body == baseline_body,
-                        "GCP setup rendered '{path}' from the image '{image}' (remote: {remote}): \
-                         {first_difference:?}"
+                        "GCP setup rendered '{path}' from the image '{image}': {first_difference:?}"
                     );
                 }
 

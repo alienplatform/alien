@@ -21,7 +21,6 @@ WAITS = re.compile(r'--timeout[ =",\s]+15m|timeout: 15m|Number\(900|"15m"|timeou
 # only mention a command, uninstall, render, or install a chart with no sandbox or container
 # egress (no setup check runs). A path that is not here must state the 15 minute wait.
 NO_SETUP_CHECK = {
-    ".github/workflows/kind-lifecycle.yml": "installs the CNI (cilium), not the chart",
     "crates/alien-cli/README.md": "describes the command",
     "crates/alien-core/src/deployment/state.rs": "doc comment",
     "crates/alien-core/src/extension.rs": "names the setup format",
