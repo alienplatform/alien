@@ -180,70 +180,6 @@ jobs:
             ${{ steps.registries.outputs.azure_container_app_image }}
           provenance: false
 
-      - name: Set up Azure OIDC token
-        run: |
-          # All cloud-test jobs declare `environment: e2e-tests`, so the
-          # OIDC `sub` becomes `repo:OWNER/REPO:environment:e2e-tests`
-          # regardless of branch/event. One Terraform-managed FIC covers
-          # all triggers.
-          SUBJECT="repo:${{ github.repository }}:environment:e2e-tests"
-          echo "AZURE_MANAGEMENT_OIDC_SUBJECT=$SUBJECT" >> $GITHUB_ENV
-          echo "AZURE_MANAGEMENT_OIDC_ISSUER=https://token.actions.githubusercontent.com" >> $GITHUB_ENV
-
-          TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=api://AzureADTokenExchange" | jq -r .value)
-          echo "$TOKEN" > /tmp/azure-oidc-token
-          echo "AZURE_FEDERATED_TOKEN_FILE=/tmp/azure-oidc-token" >> $GITHUB_ENV
-
-      - name: Generate .env.test
-        run: |
-          ./scripts/gen-env-test.sh
-          ./scripts/select-e2e-targets.sh \
-            --env-file .env.test \
-            --aws aws-target-1 \
-            --gcp gcp-target-3 \
-            --azure azure-target-1
-        env:
-          TF_TOKEN_app_terraform_io: ${{ secrets.TF_API_TOKEN }}
-          AXIOM_TOKEN: ${{ secrets.AXIOM_CI_API_KEY }}
-          OPENAI_TEST_API_KEY: ${{ secrets.OPENAI_TEST_API_KEY }}
-          ANTHROPIC_TEST_API_KEY: ${{ secrets.ANTHROPIC_TEST_API_KEY }}
-          DATABRICKS_TEST_WORKSPACE_URL: ${{ secrets.DATABRICKS_TEST_WORKSPACE_URL }}
-          DATABRICKS_TEST_CLIENT_ID: ${{ secrets.DATABRICKS_TEST_CLIENT_ID }}
-          DATABRICKS_TEST_CLIENT_SECRET: ${{ secrets.DATABRICKS_TEST_CLIENT_SECRET }}
-
-      - name: Mask all .env.test values
-        run: |
-          while IFS= read -r line; do
-            [[ "$line" =~ ^#.*$ || -z "$line" ]] && continue
-            val="${line#*=}"
-            val="${val#\'}" && val="${val%\'}"
-            val="${val#\"}" && val="${val%\"}"
-            [ -n "$val" ] && echo "::add-mask::$val"
-          done < .env.test
-
-      - name: Upload .env.test artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: env-test
-          path: .env.test
-          retention-days: 1
-          include-hidden-files: true
-
-      - name: Install 1Password CLI
-        uses: 1password/install-cli-action@v4
-
-      - name: Upload .env.test to 1Password (for local dev)
-        run: |
-          if op document get alien-test-env --vault "$OP_VAULT_NAME" > /dev/null 2>&1; then
-            op document edit alien-test-env .env.test --vault "$OP_VAULT_NAME"
-          else
-            op document create .env.test --title alien-test-env --vault "$OP_VAULT_NAME"
-          fi
-        env:
-          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
-          OP_VAULT_NAME: ${{ secrets.OP_VAULT_NAME }}
-
   test:
     needs: [setup]
     # See `setup` job for why this environment is declared.
@@ -273,12 +209,58 @@ jobs:
       - name: Configure git credentials
         run: git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
 
-      - name: Download .env.test
-        uses: actions/download-artifact@v8
+      - uses: hashicorp/setup-terraform@v4
         with:
-          name: env-test
+          terraform_wrapper: false
+          terraform_version: 1.14.5
 
-      - name: Mask sensitive values from .env.test
+      - name: Terraform init
+        working-directory: infra/test
+        run: terraform init
+        env:
+          TF_TOKEN_app_terraform_io: ${{ secrets.TF_API_TOKEN }}
+
+      - name: Mask non-secret infrastructure identifiers
+        run: |
+          echo "::add-mask::${{ vars.TEST_GCP_MGMT_PROJECT_ID }}"
+          echo "::add-mask::${{ vars.TEST_GCP_TARGET_PROJECT_ID }}"
+          echo "::add-mask::${{ vars.TEST_GCP_TARGET_1_PROJECT_ID }}"
+          echo "::add-mask::${{ vars.TEST_GCP_TARGET_2_PROJECT_ID }}"
+          echo "::add-mask::${{ vars.TEST_GCP_TARGET_3_PROJECT_ID }}"
+
+      - name: Set up Azure OIDC token
+        run: |
+          # All cloud-test jobs declare `environment: e2e-tests`, so the
+          # OIDC `sub` becomes `repo:OWNER/REPO:environment:e2e-tests`
+          # regardless of branch/event. One Terraform-managed FIC covers
+          # all triggers.
+          SUBJECT="repo:${{ github.repository }}:environment:e2e-tests"
+          echo "AZURE_MANAGEMENT_OIDC_SUBJECT=$SUBJECT" >> $GITHUB_ENV
+          echo "AZURE_MANAGEMENT_OIDC_ISSUER=https://token.actions.githubusercontent.com" >> $GITHUB_ENV
+
+          TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=api://AzureADTokenExchange" | jq -r .value)
+          echo "$TOKEN" > /tmp/azure-oidc-token
+          echo "AZURE_FEDERATED_TOKEN_FILE=/tmp/azure-oidc-token" >> $GITHUB_ENV
+
+      - name: Generate .env.test
+        run: |
+          ./scripts/gen-env-test.sh
+          ./scripts/select-e2e-targets.sh \
+            --env-file .env.test \
+            --aws "${{ inputs.aws_target || 'aws-target-1' }}" \
+            --gcp "${{ inputs.gcp_target || 'gcp-target-3' }}" \
+            --azure "${{ inputs.azure_target || 'azure-target-1' }}"
+        env:
+          TF_TOKEN_app_terraform_io: ${{ secrets.TF_API_TOKEN }}
+          AXIOM_TOKEN: ${{ secrets.AXIOM_CI_API_KEY }}
+          OPENAI_TEST_API_KEY: ${{ secrets.OPENAI_TEST_API_KEY }}
+          ANTHROPIC_TEST_API_KEY: ${{ secrets.ANTHROPIC_TEST_API_KEY }}
+          DATABRICKS_TEST_WORKSPACE_URL: ${{ secrets.DATABRICKS_TEST_WORKSPACE_URL }}
+          DATABRICKS_TEST_CLIENT_ID: ${{ secrets.DATABRICKS_TEST_CLIENT_ID }}
+          DATABRICKS_TEST_CLIENT_SECRET: ${{ secrets.DATABRICKS_TEST_CLIENT_SECRET }}
+
+      - name: Mask all .env.test values
         run: |
           while IFS= read -r line; do
             [[ "$line" =~ ^#.*$ || -z "$line" ]] && continue
@@ -287,14 +269,6 @@ jobs:
             val="${val#\"}" && val="${val%\"}"
             [ -n "$val" ] && echo "::add-mask::$val"
           done < .env.test
-
-      - name: Select E2E targets
-        run: |
-          ./scripts/select-e2e-targets.sh \
-            --env-file .env.test \
-            --aws "${{ inputs.aws_target || 'aws-target-1' }}" \
-            --gcp "${{ inputs.gcp_target || 'gcp-target-3' }}" \
-            --azure "${{ inputs.azure_target || 'azure-target-1' }}"
 
       - name: Install Rust toolchain
         uses: jdx/mise-action@v5
