@@ -241,6 +241,31 @@ fn main() -> Result<()> {
                             .into(),
                     ))?;
             }
+            // A root image without image permissions gets the same kernel-helper limits as one
+            // with them. This needs capabilities `restrict_supervisor` drops, so it comes first.
+            #[cfg(target_os = "linux")]
+            if image_command_enabled()?
+                && image_permissions.is_none()
+                && alien_sandbox_agent::image_command::image_runs_as_root()?
+            {
+                match alien_sandbox_agent::mount_broker::seal_root_image_helpers(
+                    &alien_sandbox_agent::mount_broker::HelperSettings::default(),
+                ) {
+                    Ok(Some(report)) => alien_sandbox_agent::boot_report::set("seal", report),
+                    Ok(None) => alien_sandbox_agent::boot_report::set(
+                        "seal",
+                        "not applicable: the agent has no CAP_SYS_MODULE here".to_string(),
+                    ),
+                    Err(error) => {
+                        // The image does not start; the reason is readable from the sandbox.
+                        alien_sandbox_agent::boot_error::enable();
+                        alien_sandbox_agent::boot_report::set("seal", format!("failed: {error}"));
+                        alien_sandbox_agent::boot_error::record(format!(
+                            "cannot seal the kernel helpers: {error}"
+                        ));
+                    }
+                }
+            }
             alien_sandbox_agent::privilege::restrict_supervisor(network_admin)
                 .into_alien_error()
                 .context(failed(

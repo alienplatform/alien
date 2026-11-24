@@ -476,21 +476,62 @@ pub fn serve_socket(path: &Path) -> io::Result<String> {
     wait_ack(broker.control.as_raw_fd(), "its socket")
 }
 
+/// Writes one kernel setting. Never creates the file: a setting either exists or the step fails.
+fn write_setting(step: &str, path: &Path, value: &str) -> Result<(), String> {
+    std::fs::OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .open(path)
+        .and_then(|mut file| file.write_all(value.as_bytes()))
+        .map_err(|error| format!("step {step} ({}): {error}", path.display()))
+}
+
+/// Empties the capability sets of the programs the kernel runs on its own.
+fn seal_helper_capabilities(helpers: &HelperSettings) -> Result<(), String> {
+    write_setting("usermodehelper bset", &helpers.bset, "0\t0\n")?;
+    write_setting("usermodehelper inheritable", &helpers.inheritable, "0\t0\n")
+}
+
+/// What a root image without image permissions gets at boot: the capability sets of the programs
+/// the kernel runs on its own are emptied, as for an image with a mount broker. Needs the agent's
+/// `CAP_SETPCAP` and `CAP_SYS_MODULE`, so it runs before the agent drops to the root image grant.
+/// `Ok(None)` where the platform does not grant `CAP_SYS_MODULE` (a Kubernetes pod): the kernel's
+/// helpers are the node's there, not reachable from the pod. A write that fails with the
+/// capabilities held is an error.
+pub fn seal_root_image_helpers(helpers: &HelperSettings) -> Result<Option<String>, String> {
+    let held = crate::privilege::permitted_capabilities()
+        .map_err(|error| format!("step usermodehelper bset: capget: {error}"))?;
+    seal_root_image_helpers_holding(held, helpers)
+}
+
+fn seal_root_image_helpers_holding(
+    held: u32,
+    helpers: &HelperSettings,
+) -> Result<Option<String>, String> {
+    if held & SEAL_CAPABILITIES != SEAL_CAPABILITIES {
+        return Ok(None);
+    }
+    seal_helper_capabilities(helpers)?;
+    Ok(Some(format!(
+        "usermodehelper bset {}; usermodehelper inheritable {}",
+        read_setting(&helpers.bset),
+        read_setting(&helpers.inheritable)
+    )))
+}
+
+fn read_setting(path: &Path) -> String {
+    match std::fs::read_to_string(path) {
+        Ok(value) => format!("{:?}", value.trim_end()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => "absent".to_string(),
+        Err(error) => format!("unreadable ({error})"),
+    }
+}
+
 /// Empties the capability sets of the programs the kernel runs on its own and stops module
 /// loading by program. A kernel without module support has no `modprobe` setting: nothing to
 /// stop there. Every other failure names its step and keeps the image from starting.
 fn seal_helper_settings(helpers: &HelperSettings) -> Result<(), String> {
-    let write = |step: &str, path: &Path, value: &str| {
-        // Never creates the file: a kernel setting either exists or the step fails.
-        std::fs::OpenOptions::new()
-            .write(true)
-            .truncate(true)
-            .open(path)
-            .and_then(|mut file| file.write_all(value.as_bytes()))
-            .map_err(|error| format!("step {step} ({}): {error}", path.display()))
-    };
-    write("usermodehelper bset", &helpers.bset, "0\t0\n")?;
-    write("usermodehelper inheritable", &helpers.inheritable, "0\t0\n")?;
+    seal_helper_capabilities(helpers)?;
     match std::fs::symlink_metadata(&helpers.modprobe) {
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             eprintln!(
@@ -499,22 +540,17 @@ fn seal_helper_settings(helpers: &HelperSettings) -> Result<(), String> {
             );
             Ok(())
         }
-        _ => write("modprobe", &helpers.modprobe, "\n"),
+        _ => write_setting("modprobe", &helpers.modprobe, "\n"),
     }
 }
 
 /// The helper settings as the kernel now reads them back, for the boot report.
 fn helper_settings_report(helpers: &HelperSettings) -> String {
-    let read = |path: &Path| match std::fs::read_to_string(path) {
-        Ok(value) => format!("{:?}", value.trim_end()),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => "absent".to_string(),
-        Err(error) => format!("unreadable ({error})"),
-    };
     format!(
         "usermodehelper bset {}; usermodehelper inheritable {}; modprobe {}",
-        read(&helpers.bset),
-        read(&helpers.inheritable),
-        read(&helpers.modprobe)
+        read_setting(&helpers.bset),
+        read_setting(&helpers.inheritable),
+        read_setting(&helpers.modprobe)
     )
 }
 
@@ -1622,6 +1658,43 @@ mod tests {
             inheritable: dir.join("inheritable"),
             modprobe: dir.join("modprobe"),
         }
+    }
+
+    #[test]
+    fn a_root_image_without_image_permissions_gets_the_capability_sets_emptied() {
+        let dir = tempfile::tempdir().unwrap();
+        let helpers = settings(dir.path());
+        std::fs::write(&helpers.bset, "4294967295\n").unwrap();
+        std::fs::write(&helpers.inheritable, "511\n").unwrap();
+        std::fs::write(&helpers.modprobe, "/sbin/modprobe\n").unwrap();
+        let report = seal_root_image_helpers_holding(SEAL_CAPABILITIES, &helpers)
+            .unwrap()
+            .expect("sealed");
+        assert_eq!(
+            report,
+            "usermodehelper bset \"0\\t0\"; usermodehelper inheritable \"0\\t0\""
+        );
+        assert_eq!(std::fs::read_to_string(&helpers.bset).unwrap(), "0\t0\n");
+        // Module loading is the broker's concern; this path leaves it alone.
+        assert_eq!(
+            std::fs::read_to_string(&helpers.modprobe).unwrap(),
+            "/sbin/modprobe\n"
+        );
+    }
+
+    #[test]
+    fn a_plain_root_image_seal_names_the_failing_step_and_skips_without_the_capability() {
+        let dir = tempfile::tempdir().unwrap();
+        let helpers = settings(dir.path());
+        std::fs::write(&helpers.bset, "x\n").unwrap();
+        let error = seal_root_image_helpers_holding(SEAL_CAPABILITIES, &helpers).unwrap_err();
+        assert!(error.contains("step usermodehelper inheritable"), "{error}");
+        // A Kubernetes pod holds SETPCAP but not SYS_MODULE: nothing is written.
+        assert_eq!(
+            seal_root_image_helpers_holding(1 << 8, &helpers).unwrap(),
+            None
+        );
+        assert_eq!(std::fs::read_to_string(&helpers.bset).unwrap(), "0\t0\n");
     }
 
     /// A refused cgroup join reaches the image spawn with the errno of the step that failed,

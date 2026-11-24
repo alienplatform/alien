@@ -302,6 +302,61 @@ fn start_from(
     start_from_with_env(path, identity, &Default::default(), false)
 }
 
+/// The identity the image's `USER` resolves to in this root filesystem.
+fn resolve_image_identity(image: &SandboxImageCommand) -> Result<ExecIdentity> {
+    let failed = || ErrorData::OperationFailed {
+        operation: "resolve the image user".to_string(),
+        reason: "the image's USER must resolve in its /etc/passwd and /etc/group".to_string(),
+    };
+    let user = image
+        .user
+        .as_deref()
+        .ok_or_else(|| AlienError::new(failed()))?;
+    let passwd = fs::read_to_string("/etc/passwd")
+        .into_alien_error()
+        .context(failed())?;
+    let group = fs::read_to_string("/etc/group")
+        .into_alien_error()
+        .context(failed())?;
+    let resolved = ImageUser {
+        user,
+        passwd: &passwd,
+        group: &group,
+    }
+    .image_identity()
+    .context(failed())?;
+    Ok(ExecIdentity {
+        uid: resolved.uid,
+        gid: resolved.gid,
+    })
+}
+
+/// Whether the image's startup command runs as root. False when the bundle has no command to run.
+pub fn image_runs_as_root() -> Result<bool> {
+    let bytes = match fs::read(IMAGE_COMMAND_PATH) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => {
+            return Err(error)
+                .into_alien_error()
+                .context(ErrorData::ImageCommandUnreadable {
+                    path: IMAGE_COMMAND_PATH.to_string(),
+                })
+        }
+    };
+    let image: SandboxImageCommand =
+        serde_json::from_slice(&bytes)
+            .into_alien_error()
+            .context(ErrorData::OperationFailed {
+                operation: "read the image command".to_string(),
+                reason: "the image command metadata is not valid".to_string(),
+            })?;
+    if image.command.is_empty() {
+        return Ok(false);
+    }
+    Ok(resolve_image_identity(&image)?.uid == 0)
+}
+
 fn start_from_with_env(
     path: &Path,
     identity: ExecIdentity,
@@ -331,27 +386,7 @@ fn start_from_with_env(
         return Ok(None);
     };
     let image_identity = if image_user {
-        let user = image
-            .user
-            .as_deref()
-            .ok_or_else(|| AlienError::new(failed()))?;
-        let passwd = fs::read_to_string("/etc/passwd")
-            .into_alien_error()
-            .context(failed())?;
-        let group = fs::read_to_string("/etc/group")
-            .into_alien_error()
-            .context(failed())?;
-        let resolved = ImageUser {
-            user,
-            passwd: &passwd,
-            group: &group,
-        }
-        .image_identity()
-        .context(failed())?;
-        ExecIdentity {
-            uid: resolved.uid,
-            gid: resolved.gid,
-        }
+        resolve_image_identity(&image).context(failed())?
     } else {
         identity
     };
