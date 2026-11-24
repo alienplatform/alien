@@ -172,7 +172,6 @@ Open http://localhost:3000, start a thread and send a message.
 
 5. Point the control plane at the deployment (`ALIEN_MANAGER_URL`, `ALIEN_DEPLOYMENT_ID`, `ALIEN_TOKEN`) and start it as above.
 
-**Upgrading an existing install.** The egress gateway belongs to the setup, not to a release. A stack created before per-sandbox credentials existed keeps its old gateway, and the first turn fails with `SANDBOX_EGRESS_GATEWAY_UNAVAILABLE ... re-run setup to update the egress gateway`. After you upgrade the CLI and manager, update the setup stack (CloudFormation: `aws cloudformation update-stack` with a template downloaded from the new release's package; Terraform: apply the new module version) before sending messages.
 
 The model id is `claude-sonnet-4-6` by default; set `MODEL` when you release to use another model your account can invoke on Bedrock.
 
