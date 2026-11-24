@@ -496,7 +496,7 @@ async fn metrics(State(live): State<Arc<LiveGateway>>, headers: HeaderMap) -> Re
     metrics.into_response()
 }
 
-/// Nonsecret: lets a binding refuse a gateway it cannot serve ("re-run setup to update").
+/// Nonsecret: lets a binding refuse a gateway it cannot serve ("update the deployment").
 /// Protocol 2 adds per-sandbox credential rules (`/v1/credentials`).
 pub const ADMIN_PROTOCOL: u32 = 2;
 async fn protocol() -> Response {

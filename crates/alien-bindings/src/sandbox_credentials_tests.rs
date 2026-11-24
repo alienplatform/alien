@@ -232,7 +232,7 @@ async fn a_gateway_without_credential_support_is_refused_before_any_write() {
         .update_credentials("box-1", &rules())
         .await
         .unwrap_err();
-    assert!(error.message.contains("re-run setup"), "{error:?}");
+    assert!(error.message.contains("update the deployment"), "{error:?}");
     assert!(!error.retryable);
     for replica in &setup.replicas {
         assert!(replica.writes.lock().unwrap().is_empty());
