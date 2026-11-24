@@ -1109,9 +1109,8 @@ jobs:
     needs: [pr-conventions, changes]
     if: needs.changes.outputs.run_all == 'true' || needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 40
+    timeout-minutes: 15
     env:
-      CARGO_INCREMENTAL: "0"
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -1132,15 +1131,6 @@ jobs:
         with:
           tool: cargo-hakari@0.9.39
 
-      - name: Install sccache
-        uses: ./.github/actions/setup-sccache
-
-      - name: Install protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          version: "35.x"
-          repo-token: ${{ github.token }}
-
       - name: Configure git credentials for cargo
         run: git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
 
@@ -1152,12 +1142,6 @@ jobs:
 
       - name: Check workspace-hack dependencies
         run: cargo hakari manage-deps --dry-run
-
-      # The release removes workspace-hack before `cargo publish --no-verify`, so a published
-      # crate that only compiles thanks to features workspace-hack turns on would ship broken.
-      # This must be the last step: it rewrites the manifests in this checkout.
-      - name: Check published crates compile without workspace-hack
-        run: scripts/check-published-crates.sh
 
   worker-integration:
     name: Worker integration

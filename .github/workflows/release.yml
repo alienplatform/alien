@@ -715,6 +715,15 @@ jobs:
           if-no-files-found: error
           path: qualified/crates/
 
+      # `cargo publish --no-verify` never compiles what it ships, and the workspace-hack crate hides
+      # features a crate's own manifest lacks. Qualification fails here instead of users finding out.
+      # Last step: the script rewrites the manifests in this checkout.
+      - name: Check published crates compile without workspace-hack
+        if: ${{ inputs.stable_action == 'qualification' }}
+        env:
+          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+        run: scripts/check-published-crates.sh
+
   publish-npm:
     needs: [prepare]
     if: ${{ inputs.mode == 'stable' && needs.prepare.outputs.ready == 'true' }}
