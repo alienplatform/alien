@@ -7,7 +7,7 @@ import { readFileSync } from "node:fs"
 import { Hono } from "hono"
 import { streamSSE } from "hono/streaming"
 import { commandsDataPlane } from "./data-plane"
-import { ThreadRouter } from "./router"
+import { BusyError, ThreadRouter } from "./router"
 import { ThreadStore } from "./store"
 
 function required(name: string): string {
@@ -45,7 +45,7 @@ app.post("/api/threads/:id/messages", async c => {
     await router.send(c.req.param("id"), body.user, body.text)
     return c.json({ started: true })
   } catch (error) {
-    return c.json({ error: error instanceof Error ? error.message : String(error) }, 409)
+    return c.json({ error: error instanceof Error ? error.message : String(error) }, error instanceof BusyError ? 409 : 502)
   }
 })
 
@@ -55,7 +55,7 @@ app.post("/api/threads/:id/exec", async c => {
     await router.exec(c.req.param("id"), body.command)
     return c.json({ ok: true })
   } catch (error) {
-    return c.json({ error: error instanceof Error ? error.message : String(error) }, 409)
+    return c.json({ error: error instanceof Error ? error.message : String(error) }, error instanceof BusyError ? 409 : 502)
   }
 })
 

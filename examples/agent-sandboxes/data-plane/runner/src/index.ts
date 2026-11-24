@@ -188,7 +188,7 @@ receiver.command("open", async input => {
       }
       if (found && found.state !== "terminated") return { sandboxId: known, created: false, resumed: false }
     }
-    const created = await agent.create({ env: PLACEHOLDER_ENV })
+    const created = await agent.create()
     sandboxOf.set(threadId, created.sandboxId)
     await prepareWorkspace(created.sandboxId)
     // A fresh sandbox starts a fresh conversation.

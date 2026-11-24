@@ -14,6 +14,9 @@ import type { DataPlane, Decided, PendingWrite } from "./data-plane"
 import { KeyedLock } from "./lock"
 import type { Thread, ThreadStore } from "./store"
 
+/** The thread is still answering; the caller may retry. */
+export class BusyError extends Error {}
+
 export type UiEvent =
   | { type: "user"; user: string; text: string }
   | { type: "agent"; event: Record<string, unknown> }
@@ -83,7 +86,7 @@ export class ThreadRouter {
     await this.locks.run(threadId, async () => {
       let thread = this.store.get(threadId)
       if (!thread) throw new Error(`no thread ${threadId}`)
-      if (thread.state === "running") throw new Error("this thread is already answering")
+      if (thread.state === "running") throw new BusyError("this thread is already answering")
       this.clearIdle(threadId)
       const previousUser = thread.user
       if (previousUser !== user) this.emit(threadId, { type: "notice", text: `user switched to ${user}` })

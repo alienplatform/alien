@@ -9,16 +9,26 @@ INTERNAL=${INTERNAL_API_IP:-internal-api}
 IDLE_WAIT=${IDLE_WAIT:-180}   # a little over IDLE_PAUSE_SECONDS
 
 json() { python3 -c 'import json,sys; print(json.dumps(dict(zip(sys.argv[1::2], sys.argv[2::2]))))' "$@"; }
-post() { curl -fsS -X POST "$CP$1" -H 'content-type: application/json' --data "$2"; echo; }
+post() {
+  local out code
+  out=$(curl -sS -w '\n%{http_code}' -X POST "$CP$1" -H 'content-type: application/json' --data "$2") || return 1
+  code=${out##*$'\n'}; out=${out%$'\n'*}
+  echo "$out"
+  [ "${code:0:1}" = 2 ] || { echo "request failed ($code): $1" >&2; return 1; }
+}
 say() { printf '\n== %s\n' "$*"; }
 
 # Sends a message; a thread answers 409 while its previous turn is still ending, so retry briefly.
 say_to() {
+  local out code
   for _ in $(seq 30); do
-    curl -fsS -X POST "$CP/api/threads/$1/messages" -H 'content-type: application/json' --data "$(json user "$2" text "$3")" >/dev/null 2>&1 && return 0
+    out=$(curl -sS -w '\n%{http_code}' -X POST "$CP/api/threads/$1/messages" -H 'content-type: application/json' --data "$(json user "$2" text "$3")") || return 1
+    code=${out##*$'\n'}
+    [ "${code:0:1}" = 2 ] && return 0
+    [ "$code" = 409 ] || break
     sleep 1
   done
-  echo "could not send: $3" >&2; return 1
+  echo "could not send ($code): ${out%$'\n'*}" >&2; return 1
 }
 
 # Prints the thread's events from the start; stops after $2 seconds.
