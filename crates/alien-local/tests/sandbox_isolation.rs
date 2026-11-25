@@ -115,6 +115,42 @@ async fn session_round_trips_and_runs_unprivileged() {
     );
 }
 
+/// Docker's exec gives a command `HOME` from passwd but no `USER`. The session supplies `USER`,
+/// the name of the account its commands run as, and a `USER` the session was created with wins.
+#[tokio::test]
+#[ignore = "requires a real Docker daemon"]
+async fn a_command_gets_its_accounts_home_and_user() {
+    let (manager, _dir) = manager();
+    let sandbox = "isolation-account";
+    manager.reap(sandbox).await.expect("clean slate");
+
+    let mut with_user = config(SandboxEgressMode::Deny);
+    with_user
+        .env
+        .insert("USER".to_string(), "caller".to_string());
+    for (session_id, config, expected) in [
+        ("s1", config(SandboxEgressMode::Deny), "/|nobody"),
+        ("s2", with_user, "/|caller"),
+    ] {
+        let session = manager
+            .create_session(sandbox, session_id, &config)
+            .await
+            .expect("session creates");
+        let account = manager
+            .exec(
+                &session.container_id,
+                &sh("printf '%s|%s' \"$HOME\" \"$USER\""),
+            )
+            .await
+            .expect("exec runs");
+        manager
+            .terminate(sandbox, session_id)
+            .await
+            .expect("terminates");
+        assert_eq!(stdout(&account), expected);
+    }
+}
+
 /// Exercise build inspection and planning before using the pinned image in a real session.
 #[tokio::test]
 #[ignore = "requires a real Docker daemon"]

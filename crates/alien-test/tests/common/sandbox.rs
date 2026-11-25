@@ -57,6 +57,58 @@ pub async fn check_session_runs_a_command(ctx: &TestContext) -> anyhow::Result<(
     Ok(())
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EnvironmentResponse {
+    defaults: RunResponse,
+    caller_home: RunResponse,
+}
+
+/// Calls the app's `/environment` endpoint, which runs a shell in a session that prints its uid,
+/// `HOME` and `USER` and creates a directory under `HOME`. A command gets the home and name of the
+/// account it runs as, and a `HOME` the caller passes wins. The sandbox is layered with the agent
+/// released at this workspace's version unless `ALIEN_TEST_SANDBOX_AGENT_IMAGE` names another.
+pub async fn check_session_environment(ctx: &TestContext) -> anyhow::Result<()> {
+    let url = ctx
+        .deployment
+        .url
+        .as_deref()
+        .context("the deployment has no public URL")?;
+    let response = reqwest::Client::new()
+        .post(format!("{}/environment", url.trim_end_matches('/')))
+        .bearer_auth(&ctx.deployment.id)
+        .timeout(Duration::from_secs(300))
+        .send()
+        .await
+        .context("POST /environment")?;
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .context("read /environment response")?;
+    ensure!(
+        status.is_success(),
+        "/environment answered {status}: {body}"
+    );
+    let environment: EnvironmentResponse = serde_json::from_str(&body)
+        .with_context(|| format!("parse /environment response: {body}"))?;
+
+    // The exec account the sandbox package adds, with the session root as its home.
+    let defaults = &environment.defaults;
+    ensure!(
+        defaults.exit_code == Some(0)
+            && defaults.stdout == "uid=60000\nHOME=/sandbox\nUSER=sandbox\nwritable\n",
+        "a command did not get its account's HOME and USER: {defaults:?}"
+    );
+    let caller = &environment.caller_home;
+    ensure!(
+        caller.exit_code == Some(0)
+            && caller.stdout == "uid=60000\nHOME=/sandbox/caller-home\nUSER=sandbox\nwritable\n",
+        "a HOME the caller passed did not win: {caller:?}"
+    );
+    Ok(())
+}
+
 /// The bucket the deployment's Storage `storage_id` was created as, from its stack state.
 async fn storage_bucket(ctx: &TestContext, storage_id: &str) -> anyhow::Result<String> {
     let response = ctx

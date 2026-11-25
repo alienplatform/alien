@@ -49,6 +49,43 @@ app.post("/run", async c => {
   return c.json({ sandboxId: session.sandboxId, exitCode, stdout, stderr })
 })
 
+// Opens a session and runs one fixed shell twice: once as given, and once with a `HOME` of the
+// caller's own. Each run prints its uid, `HOME` and `USER`, then creates a directory under `HOME`,
+// as a CLI that keeps its config in `~/.config` does on first run.
+app.post("/environment", async c => {
+  const deploymentId = process.env.ALIEN_DEPLOYMENT_ID
+  if (!deploymentId) return c.json({ error: "ALIEN_DEPLOYMENT_ID is not set" }, 503)
+  if (c.req.header("authorization") !== `Bearer ${deploymentId}`) {
+    return c.json({ error: "unauthorized" }, 401)
+  }
+  const script =
+    'printf "uid=%s\\nHOME=%s\\nUSER=%s\\n" "$(id -u)" "$HOME" "$USER" && mkdir -p "$HOME/.config/probe" && echo writable'
+  const agents = sandbox("agents")
+  const session = await agents.create({ timeoutMs: 300_000 })
+  const run = async (env?: Record<string, string>) => {
+    let stdout = ""
+    let stderr = ""
+    let exitCode: number | null = null
+    for await (const frame of agents.runCommand(session.sandboxId, "sh", {
+      timeoutMs: 60_000,
+      args: ["-c", script],
+      env,
+    })) {
+      if (frame.kind === "exit") exitCode = frame.exitCode
+      else if (frame.kind === "stdout") stdout += frame.data.toString()
+      else stderr += frame.data.toString()
+    }
+    return { exitCode, stdout, stderr }
+  }
+  try {
+    const defaults = await run()
+    const callerHome = await run({ HOME: "/sandbox/caller-home" })
+    return c.json({ sandboxId: session.sandboxId, defaults, callerHome })
+  } finally {
+    await agents.terminate(session.sandboxId)
+  }
+})
+
 // Tries to write one object with this Worker's own credentials, which hold a stack-wide storage
 // write grant. The test aims it at the sandbox bundle bucket, where only the deployment's
 // management role may write, and at an ordinary bucket as the control.

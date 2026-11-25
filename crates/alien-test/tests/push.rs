@@ -91,6 +91,9 @@ async fn push_aws_sandbox_session(ctx: &mut AwsPushSandboxSession) {
     common::sandbox::check_session_runs_a_command(&ctx.ctx)
         .await
         .expect("a sandbox session runs a command");
+    common::sandbox::check_session_environment(&ctx.ctx)
+        .await
+        .expect("a sandbox command gets its account's HOME and USER");
     common::sandbox::check_workload_cannot_write_bundles(&ctx.ctx)
         .await
         .expect("only management writes sandbox bundles");

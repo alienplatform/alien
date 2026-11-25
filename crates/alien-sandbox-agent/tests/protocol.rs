@@ -347,6 +347,61 @@ async fn a_command_streams_its_output_and_a_real_exit_code() {
     );
 }
 
+/// Prints the command's `HOME` and `USER`, so a test can compare them with what its account holds.
+const PRINT_ACCOUNT: &str = "printf '%s|%s' \"$HOME\" \"$USER\"";
+
+/// `HOME|USER` as a command run as this test's own uid should see them: the account's passwd home
+/// and name, or `/` and nothing for a uid with no entry. `home` is a `HOME` the caller passed.
+fn expected_account(home: Option<&str>) -> String {
+    let uid = unsafe { libc::getuid() };
+    let passwd = std::fs::read_to_string("/etc/passwd").expect("read /etc/passwd");
+    let (name, passwd_home) = passwd
+        .lines()
+        .map(|line| line.split(':').collect::<Vec<_>>())
+        .find(|fields| fields.len() >= 6 && fields[2] == uid.to_string())
+        .map(|fields| (fields[0].to_string(), fields[5].to_string()))
+        .unwrap_or_default();
+    let passwd_home = if passwd_home.is_empty() {
+        "/".to_string()
+    } else {
+        passwd_home
+    };
+    format!("{}|{name}", home.unwrap_or(&passwd_home))
+}
+
+fn stdout_text(frames: &[serde_json::Value]) -> String {
+    frames
+        .iter()
+        .filter(|frame| frame["t"] == "stdout")
+        .filter_map(|frame| frame["data"].as_str())
+        .map(|data| String::from_utf8(BASE64.decode(data).expect("base64")).expect("utf8"))
+        .collect()
+}
+
+/// A tool that keeps its config under `~` needs `HOME`: a command gets its account's, and a `HOME`
+/// the caller passes wins.
+#[tokio::test]
+async fn a_command_gets_its_accounts_home_and_user_unless_the_caller_sets_home() {
+    let agent = Agent::start().await;
+
+    for (env, home) in [
+        (json!({}), None),
+        (json!({"HOME": "/caller-home"}), Some("/caller-home")),
+    ] {
+        let response = reqwest::Client::new()
+            .post(format!("{}/v1/exec", agent.base_url))
+            .bearer_auth(agent.capability())
+            .json(&json!({"command": ["/bin/sh", "-c", PRINT_ACCOUNT], "timeoutMs": 10_000, "env": env}))
+            .send()
+            .await
+            .expect("responds");
+        assert_eq!(response.status(), 200);
+        let frames = frames(&response.text().await.expect("body"));
+        assert_eq!(frames.last().expect("terminal")["code"], 0);
+        assert_eq!(stdout_text(&frames), expected_account(home));
+    }
+}
+
 /// Over the wire: the stream ends with an error frame naming the timeout, not with a silent
 /// close the caller could read as success.
 #[tokio::test]
@@ -1144,6 +1199,52 @@ async fn a_job_completes_and_its_output_is_polled_across_calls() {
     assert_eq!(text, vec!["one", "two"], "every line survives being polled");
 }
 
+/// A job's command gets the same `HOME` and `USER` as one over `/v1/exec`.
+#[tokio::test]
+async fn a_job_gets_its_accounts_home_and_user() {
+    let agent = Agent::start().await;
+    let client = reqwest::Client::new();
+
+    let started = client
+        .post(format!("{}/", agent.base_url))
+        .bearer_auth(agent.capability())
+        .json(&json!({
+            "v": 1,
+            "op": "jobStart",
+            "command": ["/bin/sh", "-c", PRINT_ACCOUNT],
+            "timeoutMs": 10_000
+        }))
+        .send()
+        .await
+        .expect("responds");
+    assert_eq!(started.status(), 200);
+    let job_id = started.json::<serde_json::Value>().await.expect("json")["jobId"]
+        .as_str()
+        .expect("a job id")
+        .to_string();
+
+    for _ in 0..200 {
+        let body = client
+            .post(format!("{}/", agent.base_url))
+            .bearer_auth(agent.capability())
+            .json(&json!({"v": 1, "op": "jobPoll", "jobId": job_id}))
+            .send()
+            .await
+            .expect("responds")
+            .json::<serde_json::Value>()
+            .await
+            .expect("json");
+        if !body["running"].as_bool().expect("running is a bool") {
+            assert_eq!(body["exitCode"], 0, "the job exited cleanly");
+            let frames = body["frames"].as_array().expect("frames array");
+            assert_eq!(stdout_text(frames), expected_account(None));
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    panic!("the job must reach a terminal state within the poll budget");
+}
+
 /// The synchronous path is left as it was: an ordinary command over `/v1/exec` runs and returns
 /// without ever creating a job. The provider decides when to reach for a job; `exec` never does.
 #[tokio::test]
@@ -1502,6 +1603,18 @@ async fn an_interactive_command_answers_each_input_while_it_runs() {
         agent.state.interactive.is_empty(),
         "a finished command releases its id"
     );
+}
+
+/// An interactive command gets the same `HOME` and `USER` as one over `/v1/exec`.
+#[tokio::test]
+async fn an_interactive_command_gets_its_accounts_home_and_user() {
+    let agent = Agent::start().await;
+    let command = Interactive::start(&agent, "account-1", &["/bin/sh", "-c", PRINT_ACCOUNT]).await;
+
+    let (terminal, _, stdout) = command.finish().await;
+    assert_eq!(terminal["t"], "exit");
+    assert_eq!(terminal["code"], 0);
+    assert_eq!(stdout, expected_account(None));
 }
 
 /// A caller that holds the stream open without reading cannot keep a slot for a command its

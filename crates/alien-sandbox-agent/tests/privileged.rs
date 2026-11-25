@@ -151,6 +151,32 @@ async fn a_file_the_agent_wrote_is_readable_by_the_command() {
     assert_eq!(stdout_of(&frames).trim(), "print(1)");
 }
 
+/// The agent is root and the command is the exec uid, so the command's `HOME` and `USER` must be
+/// the exec account's passwd entry, not root's, or `/` and no `USER` for a uid with no entry. A
+/// host without an entry for the exec uid pins only the second case; the unit tests in `exec.rs`
+/// pin a named entry. Run where no saved image config sets `HOME` or `USER`.
+#[tokio::test]
+#[ignore = "requires running as root, e.g. inside a container"]
+async fn a_command_gets_the_exec_accounts_home_and_user() {
+    let frames = run_as_exec_uid(
+        &["/bin/sh", "-c", "printf '%s|%s' \"$HOME\" \"$USER\""],
+        None,
+    )
+    .await;
+
+    assert_eq!(exit_code_of(&frames), 0);
+    let passwd = std::fs::read_to_string("/etc/passwd").expect("read /etc/passwd");
+    let expected = passwd
+        .lines()
+        .map(|line| line.split(':').collect::<Vec<_>>())
+        .find(|fields| fields.len() >= 6 && fields[2] == EXEC_UID.to_string())
+        .map_or("/|".to_string(), |fields| {
+            let home = if fields[5].is_empty() { "/" } else { fields[5] };
+            format!("{home}|{}", fields[0])
+        });
+    assert_eq!(stdout_of(&frames), expected);
+}
+
 /// A project is uploaded as a tree, so the command has to be able to work inside it — not merely
 /// read it. Writing beside the source is what a build or an install does first.
 #[tokio::test]
