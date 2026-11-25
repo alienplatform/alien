@@ -3717,9 +3717,11 @@ fn add_custom_resource(
             .properties
             .get_index_of("StackSettings")
             .unwrap_or(resource.properties.len());
-        resource
-            .properties
-            .shift_insert(position, "ManagementConfig".to_string(), management_config);
+        resource.properties.shift_insert(
+            position,
+            "ManagementConfig".to_string(),
+            management_config,
+        );
     }
     // What setup reports about protection; the control plane shows it and trusts nothing
     // else from it.

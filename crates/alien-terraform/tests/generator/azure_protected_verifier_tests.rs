@@ -278,3 +278,27 @@ fn the_signing_vault_is_in_its_own_resource_group() {
         "protected Azure signing vault group",
     );
 }
+
+/// The signing vault uses RBAC, and the caller applying the module writes the ledger into it. The
+/// caller's Key Vault Secrets Officer grant takes minutes to reach the data plane, so the ledger
+/// waits for it.
+#[test]
+fn the_ledger_waits_for_the_callers_vault_grant() {
+    let module = render(
+        &stack(&["default-container-env"]),
+        TerraformTarget::Azure,
+        protected(),
+    );
+    let main = module
+        .iter()
+        .map(|(_, contents)| contents.to_string())
+        .collect::<String>();
+    assert!(main.contains("resource \"time_sleep\" \"management_signing_setup_rbac\""));
+    let ledger = main
+        .split("resource \"azurerm_key_vault_secret\" \"management_signing_ledger\"")
+        .nth(1)
+        .and_then(|rest| rest.split("\n}\n").next())
+        .expect("the ledger secret");
+    assert!(ledger.contains("time_sleep.management_signing_setup_rbac"));
+    assert!(!ledger.contains("azurerm_role_assignment.management_signing_setup"));
+}
