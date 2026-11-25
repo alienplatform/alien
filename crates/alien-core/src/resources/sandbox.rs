@@ -98,6 +98,24 @@ pub struct MicrovmTier {
     pub max_disk_mib: i64,
 }
 
+impl MicrovmTier {
+    /// Whether an image of `image_bytes` uncompressed builds on this size's disk, leaving the
+    /// build its working room.
+    pub fn fits_image(&self, image_bytes: u64) -> bool {
+        let usable_mib = (self.max_disk_mib - MICROVM_BUILD_DISK_MARGIN_MIB).max(0) as u64;
+        image_bytes <= usable_mib * 1024 * 1024
+    }
+}
+
+/// MiB as a quantity a deployer reads, in GiB when whole.
+fn format_mib(mib: u64) -> String {
+    if mib % 1024 == 0 {
+        format!("{}Gi", mib / 1024)
+    } else {
+        format!("{mib}Mi")
+    }
+}
+
 /// The published sizes, smallest first. Baseline memory to vCPU is 2 GB per vCPU, peak is four
 /// times baseline, and disk is fixed per tier rather than independently selectable.
 /// Longest life AWS will run a MicroVM for, from `RunMicrovm`'s `maximumDurationInSeconds`.
@@ -117,6 +135,12 @@ const AZURE_CPU_STEP_MILLICORES: i64 = 250;
 const AZURE_MAX_CPU_MILLICORES: i64 = 16_000;
 const AZURE_MEMORY_MIB_PER_CORE: i64 = 2 * 1024;
 const AZURE_DISK_MIB_PER_CORE: i64 = 20 * 1024;
+
+/// Disk a MicroVM image build needs beyond the image's own uncompressed size, in MiB. AWS pulls,
+/// exports and then builds the image on the size's disk, so an image just under the disk size
+/// still fails the build with AWS's bare "An unknown error occurred". PROVISIONAL until measured
+/// with a bisect of real builds.
+pub const MICROVM_BUILD_DISK_MARGIN_MIB: i64 = 2560;
 
 const MICROVM_TIERS: &[MicrovmTier] = &[
     MicrovmTier {
@@ -725,6 +749,13 @@ pub struct Sandbox {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "openapi", schema(ignore))]
     pub image_user: Option<u32>,
+    /// Uncompressed size of the built image in bytes, the largest across built architectures.
+    /// Absent on released artifacts and when it could not be measured; then no size check runs.
+    /// This is build output, not an authoring option.
+    #[builder(skip)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(ignore))]
+    pub image_size_bytes: Option<u64>,
     /// Private ECR base image an AWS build pulls; `code.image` names only the S3 bundle, so this is
     /// what the cross-account grant opens. Live only: the grant needs the customer account,
     /// which registration reports. Absent means the base image is pulled anonymously.
@@ -1346,6 +1377,31 @@ impl Sandbox {
         }
 
         Ok(tier)
+    }
+
+    /// Refuses an image that cannot be built on the disk of the MicroVM size the limits select.
+    ///
+    /// `image_bytes` is the image's uncompressed size. The message names the sizes in the
+    /// deployer's own terms: the image, the disk, and the limits that select a large enough size.
+    pub fn check_microvm_image_fits(&self, image_bytes: u64) -> Result<()> {
+        let tier = self.microvm_tier()?;
+        if tier.fits_image(image_bytes) {
+            return Ok(());
+        }
+        let advice = match MICROVM_TIERS.iter().find(|t| t.fits_image(image_bytes)) {
+            Some(larger) => format!(
+                "raise the sandbox limits to at least {}Mi disk, {}Mi memory and {} cpu, or \
+                 make the image smaller",
+                larger.max_disk_mib, larger.peak_memory_mib, larger.peak_vcpu
+            ),
+            None => "no AWS MicroVM size has a disk this large; make the image smaller".to_string(),
+        };
+        Err(AlienError::new(ErrorData::SandboxImageTooLarge {
+            resource_id: self.id.clone(),
+            image_size: format_mib(image_bytes.div_ceil(1024 * 1024)),
+            disk: format_mib(tier.max_disk_mib as u64),
+            advice,
+        }))
     }
 
     /// The capability checks that do not depend on declared limits.
@@ -2993,6 +3049,70 @@ mod tests {
             "which is a quarter of it as the baseline"
         );
         assert!(tier.max_disk_mib <= 20 * 1024);
+    }
+
+    fn with_limits(memory: &str, cpu: &str, disk: &str) -> Sandbox {
+        let mut sandbox = sandbox_with(SandboxEgress::None, vec![]);
+        let limits = sandbox.limits.as_mut().expect("the fixture declares limits");
+        limits.memory = memory.to_string();
+        limits.cpu = cpu.to_string();
+        limits.disk = disk.to_string();
+        sandbox
+    }
+
+    const MIB: u64 = 1024 * 1024;
+
+    /// Every size accepts an image up to its disk minus the build margin and refuses one byte more.
+    #[test]
+    fn every_microvm_size_accepts_an_image_up_to_its_line_and_refuses_one_byte_over() {
+        for tier in MICROVM_TIERS {
+            let line = (tier.max_disk_mib - MICROVM_BUILD_DISK_MARGIN_MIB) as u64 * MIB;
+            assert!(tier.fits_image(0));
+            assert!(tier.fits_image(line - 1), "under the line, {tier:?}");
+            assert!(tier.fits_image(line), "at the line, {tier:?}");
+            assert!(!tier.fits_image(line + 1), "over the line, {tier:?}");
+        }
+    }
+
+    /// The failing case from the field: a 5.9 GiB image under 4Gi memory / 10Gi disk ceilings,
+    /// which select the 8 GiB disk. The refusal states the image, the disk and the limits to raise.
+    #[test]
+    fn an_image_over_the_selected_disk_is_refused_with_the_limits_to_raise() {
+        let sandbox = with_limits("4Gi", "2", "10Gi");
+        let image = (5.9 * 1024.0 * MIB as f64) as u64;
+        let error = sandbox
+            .check_microvm_image_fits(image)
+            .expect_err("5.9 GiB does not build on an 8 GiB disk");
+        assert_eq!(error.code, "SANDBOX_IMAGE_TOO_LARGE");
+        let text = error.to_string();
+        assert!(text.contains("6042Mi"), "image size: {text}");
+        assert!(text.contains("8Gi disk"), "disk of the chosen size: {text}");
+        assert!(text.contains("16384Mi disk"), "limits to raise: {text}");
+        assert!(text.contains("16384Mi memory") && text.contains("8 cpu"), "{text}");
+    }
+
+    /// Under the line the build proceeds; the default size, with no limits declared, is checked too.
+    #[test]
+    fn an_image_under_the_line_passes_and_the_default_size_is_checked() {
+        let sandbox = with_limits("4Gi", "2", "10Gi");
+        sandbox.check_microvm_image_fits(1024 * MIB).expect("1 GiB fits");
+
+        let mut undeclared = sandbox_with(SandboxEgress::None, vec![]);
+        undeclared.limits = None;
+        undeclared.check_microvm_image_fits(1024 * MIB).expect("fits the default size");
+        undeclared
+            .check_microvm_image_fits(40 * 1024 * MIB)
+            .expect_err("40 GiB fits no size");
+    }
+
+    /// An image no size can hold says so rather than naming limits that do not exist.
+    #[test]
+    fn an_image_larger_than_every_disk_asks_for_a_smaller_image() {
+        let sandbox = with_limits("32Gi", "16", "32Gi");
+        let error = sandbox
+            .check_microvm_image_fits(64 * 1024 * MIB)
+            .expect_err("64 GiB fits no size");
+        assert!(error.to_string().contains("make the image smaller"));
     }
 
     /// AWS allocates one vCPU per 2GB, so a cpu ceiling below what the memory ceiling implies
