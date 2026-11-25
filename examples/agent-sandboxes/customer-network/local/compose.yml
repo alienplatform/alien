@@ -1,0 +1,19 @@
+# The customer's systems for `alien dev`: containers on the local deployment network, outside
+# the stack. Start them after `alien dev` has created the network. The connector reaches them as
+# http://internal-api:8080 and http://scanner:8081; a sandbox cannot reach either.
+services:
+  internal-api:
+    build: ../internal-api
+    container_name: internal-api
+    networks: [deployment-network]
+  scanner:
+    build: ../scanner
+    container_name: scanner
+    # The customer's own key. The connector gets the same value from the customer's secret store.
+    environment:
+      SCANNER_API_KEY: ${SCANNER_API_KEY:?set SCANNER_API_KEY}
+    networks: [deployment-network]
+
+networks:
+  deployment-network:
+    external: true
