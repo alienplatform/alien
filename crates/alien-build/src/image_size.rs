@@ -18,9 +18,8 @@ const MAX_DOCUMENT_BYTES: u64 = 1 << 20;
 const BLOCK_BYTES: u64 = 4096;
 
 /// The disk in bytes, in whole 4 KiB blocks per file, that the filesystem the image's layers
-/// produce when applied in order takes, or
-/// `None` when it cannot be measured (an unreadable archive or a layer compression this reader
-/// does not decode). `None` skips the size check; it never blocks a build.
+/// produce when applied in order takes, or `None` when it cannot be measured (an unreadable
+/// archive). `None` skips the size check; it never blocks a build.
 pub(crate) fn uncompressed_size(archive: &Path) -> Option<u64> {
     measure(archive).ok().flatten()
 }
@@ -83,15 +82,13 @@ fn measure(archive: &Path) -> io::Result<Option<u64>> {
         let digest = layer["digest"]
             .as_str()
             .ok_or_else(|| invalid("layer has no digest"))?;
-        if !apply_layer(archive, &blob_name(digest), &mut files)? {
-            return Ok(None);
-        }
+        apply_layer(archive, &blob_name(digest), &mut files)?;
     }
     Ok(Some(files.values().sum()))
 }
 
-/// Applies one layer to the merged file map. `false` means the layer's compression is unknown.
-fn apply_layer(archive: &Path, name: &str, files: &mut BTreeMap<String, u64>) -> io::Result<bool> {
+/// Applies one layer, plain, gzip or zstd, to the merged file map.
+fn apply_layer(archive: &Path, name: &str, files: &mut BTreeMap<String, u64>) -> io::Result<()> {
     let mut outer = tar::Archive::new(File::open(archive)?);
     for entry in outer.entries_with_seek()? {
         let entry = entry?;
@@ -110,15 +107,11 @@ fn apply_layer(archive: &Path, name: &str, files: &mut BTreeMap<String, u64>) ->
             ]
         };
         return match magic {
-            [0x1f, 0x8b, ..] => {
-                read_layer(flate2::bufread::GzDecoder::new(reader), files)?;
-                Ok(true)
+            [0x1f, 0x8b, ..] => read_layer(flate2::bufread::GzDecoder::new(reader), files),
+            [0x28, 0xb5, 0x2f, 0xfd] => {
+                read_layer(zstd::stream::read::Decoder::with_buffer(reader)?, files)
             }
-            [0x28, 0xb5, 0x2f, 0xfd] => Ok(false),
-            _ => {
-                read_layer(reader, files)?;
-                Ok(true)
-            }
+            _ => read_layer(reader, files),
         };
     }
     Err(invalid("layer blob is missing from the image archive"))
@@ -247,6 +240,15 @@ mod tests {
             layer(&[("etc/.wh..wh..opq", 0), ("etc/new", 10)], true),
         ]);
         assert_eq!(uncompressed_size(file.path()), Some(4096 * 2));
+    }
+
+    /// dockdash writes zstd layers by default, so they are the common case.
+    #[test]
+    fn a_zstd_layer_is_measured() {
+        let plain = layer(&[("usr/a", 10_000)], false);
+        let zstd_layer = zstd::encode_all(plain.as_slice(), 1).unwrap();
+        let file = archive(vec![zstd_layer]);
+        assert_eq!(uncompressed_size(file.path()), Some(12288));
     }
 
     /// `crane pull --format oci` and `tar -C dir .` write every entry under `./`.
