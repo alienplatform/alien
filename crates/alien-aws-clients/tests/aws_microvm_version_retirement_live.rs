@@ -514,3 +514,37 @@ async fn show_probe_versions() {
         );
     }
 }
+
+/// Uploads a prebuilt bundle (for example one carrying the shipped agent) to the probe bucket
+/// under `sandbox-bundle/<PROBE_FIXTURE_NAME>/bundle.zip`, records the key for cleanup and
+/// prints `PROBE_FIXTURE_URI`. `PROBE_FIXTURE_ZIP` is the local file.
+#[tokio::test]
+#[ignore]
+async fn put_fixture_bundle() {
+    let mut state = load();
+    let bucket = state.bucket.clone().expect("a probe bucket");
+    let name = std::env::var("PROBE_FIXTURE_NAME").expect("PROBE_FIXTURE_NAME");
+    assert!(
+        !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'),
+        "PROBE_FIXTURE_NAME is letters, digits and dashes"
+    );
+    let key = format!("sandbox-bundle/{name}/bundle.zip");
+    assert!(!state.keys.contains(&key), "{key} already exists");
+    let body = std::fs::read(std::env::var("PROBE_FIXTURE_ZIP").expect("PROBE_FIXTURE_ZIP"))
+        .expect("read the fixture zip");
+    S3Client::new(Client::new(), provider())
+        .put_object(&PutObjectRequest {
+            bucket: bucket.clone(),
+            key: key.clone(),
+            body,
+            content_type: Some("application/zip".to_string()),
+            content_md5: None,
+            server_side_encryption: None,
+            storage_class: None,
+        })
+        .await
+        .expect("put fixture bundle");
+    state.keys.push(key.clone());
+    save(&state);
+    println!("PROBE_FIXTURE_URI=s3://{bucket}/{key}");
+}
