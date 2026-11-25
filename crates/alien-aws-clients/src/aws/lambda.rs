@@ -301,6 +301,18 @@ impl LambdaClient {
         };
 
         Some(match code.as_str() {
+            // An event source mapping's MaximumConcurrency above the function's reserved
+            // concurrency. Lambda reports it as a 400 whose Type is "User" rather than an
+            // exception name, so it would otherwise surface as a retryable HTTP error. The same
+            // request fails again until the reserved concurrency changes.
+            _ if status == StatusCode::BAD_REQUEST
+                && message.contains("is greater than Function Reserved Concurrency") =>
+            {
+                ErrorData::InvalidInput {
+                    message,
+                    field_name: Some("MaximumConcurrency".to_string()),
+                }
+            }
             // Access / auth
             "AccessDeniedException"
             | "NotAuthorized"
@@ -1477,4 +1489,25 @@ pub struct AccountConcurrencyLimit {
 #[serde(rename_all = "PascalCase")]
 pub struct FunctionConcurrency {
     pub reserved_concurrent_executions: Option<u32>,
+}
+
+#[cfg(test)]
+mod error_mapping_tests {
+    use super::*;
+    use alien_error::AlienErrorData as _;
+
+    #[test]
+    fn mapping_concurrency_above_the_reserved_limit_is_not_retryable() {
+        let body = r#"{"Type":"User","Message":"Invalid request provided: MaximumConcurrency: 16 is greater than Function Reserved Concurrency: 2"}"#;
+        let error = LambdaClient::map_lambda_error(
+            StatusCode::BAD_REQUEST,
+            body,
+            "UpdateEventSourceMapping",
+            "uuid",
+            None,
+        )
+        .expect("mapped");
+        assert!(matches!(error, ErrorData::InvalidInput { .. }), "{error:?}");
+        assert!(!error.retryable());
+    }
 }
