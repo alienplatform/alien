@@ -95,6 +95,19 @@ fn lambda_concurrency_error(error: AlienError<CloudClientErrorData>, region: &st
     error.into_generic()
 }
 
+/// Whether a reserved-concurrency change must reach the function before the queue event source
+/// mappings are updated. A mapping's MaximumConcurrency may not exceed the function's reserved
+/// concurrency, and the mappings are sized from the new limit, so a limit that goes up (or is
+/// removed) has to be applied first. A limit that goes down or is newly set is applied after the
+/// mappings have been lowered or created.
+fn concurrency_precedes_mappings(previous: Option<u32>, desired: Option<u32>) -> bool {
+    match (previous, desired) {
+        (Some(previous), Some(desired)) => desired > previous,
+        (Some(_), None) => true,
+        (None, _) => false,
+    }
+}
+
 /// The image of a Lambda update: usable now, or still being replicated (the step returns the
 /// action to come back later).
 enum CheckedImage {
@@ -116,9 +129,12 @@ const IMAGE_REPLICATION_WAIT_SECONDS: i64 = 15 * 60;
 /// take in practice, and still short enough that a stuck create fails within one sitting.
 const VPC_LAMBDA_WAIT_SECONDS: i64 = 15 * 60;
 
-// Lambda can take 20 minutes to release Hyperplane ENIs after VPC detachment.
-// Shared ENIs in customer networks may remain in use by other functions indefinitely.
-const EXTERNAL_VPC_ENI_WAIT_SECONDS: i64 = 20 * 60;
+/// How long a delete waits for Lambda to release the network interfaces of a function that was
+/// attached to a VPC. AWS releases them on its own schedule, measured in tens of minutes, and
+/// documents no upper bound. Terraform's `aws_lambda_function` delete waits up to 45 minutes for
+/// the same interfaces, so this does too. The wait is counted on the wall clock from the first
+/// poll and persists in the controller, so a restart or retry does not shorten it.
+const VPC_ENI_WAIT_SECONDS: i64 = 45 * 60;
 
 /// Where a Lambda create or update stands, from one GetFunctionConfiguration read.
 #[derive(Debug, PartialEq)]
@@ -4376,6 +4392,17 @@ impl AwsWorkerController {
         let current_config = ctx.desired_resource_config::<Worker>()?;
         let previous_config = ctx.previous_resource_config::<Worker>()?;
 
+        // A higher limit must be in place before the mappings ask for it. The write is
+        // idempotent, so a retry (including one resumed from a deployment that failed here before
+        // the order was fixed) repeats it harmlessly.
+        if concurrency_precedes_mappings(
+            previous_config.concurrency_limit,
+            current_config.concurrency_limit,
+        ) {
+            self.apply_reserved_concurrency(ctx, &current_config, &previous_config)
+                .await?;
+        }
+
         // Validation: Only allow at most one queue trigger per worker (non-retriable error)
         let queue_trigger_count = current_config
             .triggers
@@ -4716,40 +4743,12 @@ impl AwsWorkerController {
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Worker>()?;
         let prev_config = ctx.previous_resource_config::<Worker>()?;
-        let aws_cfg = ctx.get_aws_config()?;
-        let client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
-        let aws_worker_name = get_aws_worker_name(ctx.resource_prefix, &config.id);
 
-        // On a protected install the concurrency went to the verifier with the code and
-        // configuration (UpdateConfigStart).
-        if verifier::protected_statements(ctx, &config.id)?.is_some() {
-            debug!(worker=%config.id, "Concurrency was part of the verifier's update");
-        } else if config.concurrency_limit != prev_config.concurrency_limit {
-            match config.concurrency_limit {
-                Some(limit) => {
-                    info!(worker=%config.id, limit=%limit, "Updating reserved concurrency on worker");
-                    client
-                        .put_function_concurrency(&aws_worker_name, limit)
-                        .await
-                        .map_err(|error| lambda_concurrency_error(error, &aws_cfg.region))
-                        .context(ErrorData::CloudPlatformError {
-                            message: "Failed to update worker reserved concurrency".to_string(),
-                            resource_id: Some(config.id.clone()),
-                        })?;
-                }
-                None => {
-                    info!(worker=%config.id, "Removing reserved concurrency from worker");
-                    client
-                        .delete_function_concurrency(&aws_worker_name)
-                        .await
-                        .context(ErrorData::CloudPlatformError {
-                            message: "Failed to remove worker reserved concurrency".to_string(),
-                            resource_id: Some(config.id.clone()),
-                        })?;
-                }
-            }
+        if concurrency_precedes_mappings(prev_config.concurrency_limit, config.concurrency_limit) {
+            debug!(worker=%config.id, "Concurrency was applied before the event source mappings");
         } else {
-            debug!(worker=%config.id, "Concurrency limit unchanged, skipping");
+            self.apply_reserved_concurrency(ctx, &config, &prev_config)
+                .await?;
         }
 
         Ok(HandlerAction::Continue {
@@ -5361,19 +5360,30 @@ impl AwsWorkerController {
             .filter_map(|eni| eni.network_interface_id.as_deref())
             .collect::<Vec<_>>();
 
-        if !owns_network
-            && Utc::now()
-                .signed_duration_since(wait_started_at)
-                .num_seconds()
-                >= EXTERNAL_VPC_ENI_WAIT_SECONDS
-        {
+        let waited_seconds = Utc::now()
+            .signed_duration_since(wait_started_at)
+            .num_seconds();
+        if waited_seconds >= VPC_ENI_WAIT_SECONDS {
+            self.vpc_eni_wait_started_at = None;
+            if owns_network {
+                // The network is deleted next and cannot go while interfaces remain. A retry
+                // of the delete starts a fresh wait.
+                return Err(AlienError::new(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "AWS did not release the network interfaces of worker '{}' within {} minutes ({}). Retry the delete once AWS has released them",
+                        worker_config.id,
+                        VPC_ENI_WAIT_SECONDS / 60,
+                        network_interface_ids.join(", ")
+                    ),
+                    resource_id: Some(worker_config.id.clone()),
+                }));
+            }
             warn!(
                 worker=%worker_config.id,
                 network_interfaces=?network_interface_ids,
-                wait_seconds=EXTERNAL_VPC_ENI_WAIT_SECONDS,
+                wait_seconds=VPC_ENI_WAIT_SECONDS,
                 "Lambda VPC interfaces remain after the cleanup wait; they may be shared with other functions. Continuing deletion in the externally managed network; unshared interfaces may require manual cleanup after the execution role is removed"
             );
-            self.vpc_eni_wait_started_at = None;
             return Ok(HandlerAction::Continue {
                 state: DeletingCertificate,
                 suggested_delay: None,
@@ -5383,13 +5393,16 @@ impl AwsWorkerController {
         info!(
             worker=%worker_config.id,
             network_interfaces=?network_interface_ids,
-            "Waiting for Lambda VPC network interfaces to be released"
+            waited_minutes=waited_seconds / 60,
+            "Waiting for AWS to release the network interfaces of worker '{}', can take up to {} minutes",
+            worker_config.id,
+            VPC_ENI_WAIT_SECONDS / 60
         );
 
         Ok(HandlerAction::Stay {
-            // Keep the owned-network failure behavior. External networks use the persisted
-            // deadline: reconcile frequency must not turn a 20-minute wait into seconds.
-            max_times: if owns_network { Some(90) } else { None },
+            // The persisted wall-clock deadline bounds the wait; reconcile frequency must not
+            // turn it into seconds, and a poll count must not cut it short.
+            max_times: None,
             suggested_delay: Some(Duration::from_secs(10)),
         })
     }
@@ -6188,6 +6201,51 @@ impl AwsWorkerController {
         }))
     }
 
+    /// Brings the function's reserved concurrency to the desired limit when it changed.
+    async fn apply_reserved_concurrency(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        config: &alien_core::Worker,
+        prev_config: &alien_core::Worker,
+    ) -> Result<()> {
+        let aws_cfg = ctx.get_aws_config()?;
+        let client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
+        let aws_worker_name = get_aws_worker_name(ctx.resource_prefix, &config.id);
+
+        // On a protected install the concurrency went to the verifier with the code and
+        // configuration (UpdateConfigStart).
+        if verifier::protected_statements(ctx, &config.id)?.is_some() {
+            debug!(worker=%config.id, "Concurrency was part of the verifier's update");
+        } else if config.concurrency_limit != prev_config.concurrency_limit {
+            match config.concurrency_limit {
+                Some(limit) => {
+                    info!(worker=%config.id, limit=%limit, "Updating reserved concurrency on worker");
+                    client
+                        .put_function_concurrency(&aws_worker_name, limit)
+                        .await
+                        .map_err(|error| lambda_concurrency_error(error, &aws_cfg.region))
+                        .context(ErrorData::CloudPlatformError {
+                            message: "Failed to update worker reserved concurrency".to_string(),
+                            resource_id: Some(config.id.clone()),
+                        })?;
+                }
+                None => {
+                    info!(worker=%config.id, "Removing reserved concurrency from worker");
+                    client
+                        .delete_function_concurrency(&aws_worker_name)
+                        .await
+                        .context(ErrorData::CloudPlatformError {
+                            message: "Failed to remove worker reserved concurrency".to_string(),
+                            resource_id: Some(config.id.clone()),
+                        })?;
+                }
+            }
+        } else {
+            debug!(worker=%config.id, "Concurrency limit unchanged, skipping");
+        }
+        Ok(())
+    }
+
     // ─────────────── HELPER METHODS ────────────────────────────
 
     /// One poll of a bounded wait for a Lambda create or update. Returns `None` once the
@@ -6643,6 +6701,7 @@ mod tests {
     use httpmock::prelude::*;
     use rstest::rstest;
 
+    use super::{concurrency_precedes_mappings, VPC_ENI_WAIT_SECONDS};
     use crate::core::aws_tag_scoped::logs_access_denied;
     use crate::core::controller_test::SingleControllerExecutor;
     use crate::core::verifier_test_support::{
@@ -6862,6 +6921,142 @@ mod tests {
         }
     }
 
+    #[test]
+    fn concurrency_precedes_mappings_only_when_the_limit_rises_or_is_removed() {
+        assert!(concurrency_precedes_mappings(Some(2), Some(16)));
+        assert!(concurrency_precedes_mappings(Some(2), None));
+        assert!(!concurrency_precedes_mappings(Some(16), Some(2)));
+        assert!(!concurrency_precedes_mappings(None, Some(8)));
+        assert!(!concurrency_precedes_mappings(Some(4), Some(4)));
+        assert!(!concurrency_precedes_mappings(None, None));
+    }
+
+    /// Raising the limit must reach the function before the mappings ask for it; lowering it
+    /// follows the mappings. The saved state is the one a deployment stuck on the old order holds
+    /// (UpdateEventSourceMappings), so a retry after the upgrade takes the new order.
+    #[rstest]
+    #[case::raised(Some(2), Some(16), &["put:16", "mapping:Some(16)"])]
+    #[case::lowered(Some(16), Some(2), &["mapping:Some(2)", "put:2"])]
+    #[case::first_limit(None, Some(8), &["mapping:Some(8)", "put:8"])]
+    #[case::removed(Some(8), None, &["delete", "mapping:None"])]
+    #[case::unchanged(Some(4), Some(4), &["mapping:Some(4)"])]
+    #[tokio::test]
+    async fn queue_trigger_and_concurrency_updates_apply_in_a_safe_order(
+        #[case] previous_limit: Option<u32>,
+        #[case] desired_limit: Option<u32>,
+        #[case] expected: &[&str],
+    ) {
+        let batch = alien_core::QueueBatchConfig {
+            max_messages: 100,
+            max_window_seconds: 10,
+        };
+        let mut worker = function_with_queue_trigger();
+        worker.triggers =
+            vec![alien_core::WorkerTrigger::queue_batch(&test_queue(), batch).unwrap()];
+        let mut previous = worker.clone();
+        previous.concurrency_limit = previous_limit;
+        worker.concurrency_limit = desired_limit;
+
+        let events = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let mapping = || {
+            serde_json::from_value::<EventSourceMapping>(serde_json::json!({
+                "UUID": "retained-id",
+                "EventSourceArn": "arn:aws:sqs:us-east-1:123456789012:imported-a7d9-jobs",
+                "FunctionArn": "arn:aws:lambda:us-east-1:123456789012:function:test-queue-func",
+                "State": "Enabled",
+            }))
+            .expect("mapping")
+        };
+        let mut lambda = MockLambdaApi::new();
+        lambda
+            .expect_list_event_source_mappings()
+            .returning(move |_| {
+                Ok(ListEventSourceMappingsResponse {
+                    event_source_mappings: Some(vec![mapping()]),
+                    next_marker: None,
+                })
+            });
+        let log = events.clone();
+        lambda
+            .expect_update_event_source_mapping()
+            .returning(move |_, request| {
+                log.lock().unwrap().push(format!(
+                    "mapping:{:?}",
+                    request.scaling_config.and_then(|s| s.maximum_concurrency)
+                ));
+                Ok(mapping())
+            });
+        let log = events.clone();
+        lambda
+            .expect_put_function_concurrency()
+            .returning(move |_, limit| {
+                log.lock().unwrap().push(format!("put:{limit}"));
+                Ok(())
+            });
+        let log = events.clone();
+        lambda
+            .expect_delete_function_concurrency()
+            .returning(move |_| {
+                log.lock().unwrap().push("delete".to_string());
+                Ok(())
+            });
+        let required = worker.timeout_seconds * 6 + 5;
+        let mut sqs = alien_aws_clients::sqs::MockSqsApi::new();
+        sqs.expect_get_queue_attributes().returning(move |_, _| {
+            Ok(alien_aws_clients::sqs::GetQueueAttributesResponse {
+                get_queue_attributes_result: alien_aws_clients::sqs::GetQueueAttributesResult {
+                    attributes: vec![alien_aws_clients::sqs::Attribute {
+                        name: "VisibilityTimeout".into(),
+                        value: (required + 30).to_string(),
+                    }],
+                },
+            })
+        });
+        let sqs = Arc::new(sqs);
+        let mut provider = setup_mock_service_provider(Arc::new(lambda), None, None);
+        Arc::get_mut(&mut provider)
+            .unwrap()
+            .expect_get_aws_sqs_client()
+            .returning(move |_| Ok(sqs.clone()));
+        let mut controller = AwsWorkerController::mock_ready("test-queue-func");
+        controller.state = AwsWorkerState::UpdateEventSourceMappings;
+        controller.event_source_mappings = vec!["retained-id".into()];
+        let controller: AwsWorkerController =
+            serde_json::from_value(serde_json::to_value(controller).unwrap()).unwrap();
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(worker)
+            .previous_resource(previous)
+            .controller(controller)
+            .platform(Platform::Aws)
+            .service_provider(provider)
+            .with_test_dependencies()
+            .with_dependency(
+                test_queue(),
+                crate::queue::aws::AwsQueueController {
+                    state: crate::queue::aws::AwsQueueState::Ready,
+                    queue_name: Some("imported-a7d9-jobs".into()),
+                    queue_url: Some(
+                        "https://sqs.us-east-1.amazonaws.com/123456789012/imported-a7d9-jobs"
+                            .into(),
+                    ),
+                    ..Default::default()
+                },
+            )
+            .build()
+            .await
+            .unwrap();
+        executor.step().await.expect("mappings step");
+        executor.step().await.expect("concurrency step");
+        assert_eq!(
+            executor
+                .internal_state::<AwsWorkerController>()
+                .unwrap()
+                .state,
+            AwsWorkerState::Ready
+        );
+        assert_eq!(*events.lock().unwrap(), expected);
+    }
+
     #[tokio::test]
     async fn queue_mapping_updates_preserve_identity_and_reset_removed_settings() {
         for mode in 0..4 {
@@ -6930,6 +7125,11 @@ mod tests {
                         })
                 })
                 .returning(move |_, _| Ok(mapping()));
+            // Mode 2 raises the limit, which now reaches the function before the mappings.
+            lambda
+                .expect_put_function_concurrency()
+                .times(if mode == 2 { 1 } else { 0 })
+                .returning(|_, _| Ok(()));
             lambda
                 .expect_delete_event_source_mapping()
                 .times(if mode == 3 { 0 } else { 1 })
@@ -8140,10 +8340,10 @@ mod tests {
     }
 
     #[rstest]
-    #[case::existing_wait(false, 1190, true)]
-    #[case::existing_timeout(false, 1200, true)]
+    #[case::existing_wait(false, 2690, true)]
+    #[case::existing_timeout(false, 2700, true)]
     #[case::existing_released(false, 0, false)]
-    #[case::created_wait(true, 1200, true)]
+    #[case::created_wait(true, 2690, true)]
     #[case::created_released(true, 0, false)]
     #[tokio::test]
     async fn eni_wait_respects_network_ownership_and_wall_clock(
@@ -8203,7 +8403,7 @@ mod tests {
             .unwrap();
         executor.step().await.unwrap();
         let controller = executor.internal_state::<AwsWorkerController>().unwrap();
-        let waiting = interfaces_remain && (owns_network || elapsed_seconds < 1200);
+        let waiting = interfaces_remain && (owns_network || elapsed_seconds < 2700);
         assert_eq!(
             controller.state,
             if waiting {
@@ -8215,6 +8415,67 @@ mod tests {
         assert_eq!(
             controller.vpc_eni_wait_started_at,
             if waiting { Some(started) } else { None }
+        );
+    }
+
+    /// A network the deployment owns cannot be deleted while interfaces remain, so past the wait
+    /// the delete fails with a clear message, and the retry starts a fresh wait.
+    #[tokio::test]
+    async fn eni_wait_in_an_owned_network_fails_after_the_wall_clock_wait_and_a_retry_starts_over()
+    {
+        let mut ec2 = MockEc2Api::new();
+        ec2.expect_describe_network_interfaces().returning(|_| {
+            Ok(serde_json::from_value(serde_json::json!({
+                "networkInterfaceSet": { "item": [{"networkInterfaceId": "eni-held", "description": "AWS Lambda VPC ENI-test-basic-func", "status": "available"}] }
+            }))
+            .unwrap())
+        });
+        let ec2 = Arc::new(ec2);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_ec2_client()
+            .returning(move |_| Ok(ec2.clone()));
+        let controller = AwsWorkerController {
+            state: AwsWorkerState::WaitingForVpcEnisReleased,
+            vpc_eni_wait_started_at: Some(
+                chrono::Utc::now() - chrono::Duration::seconds(VPC_ENI_WAIT_SECONDS),
+            ),
+            ..Default::default()
+        };
+        let settings = StackSettings {
+            network: Some(NetworkSettings::Create {
+                cidr: None,
+                availability_zones: 2,
+            }),
+            ..Default::default()
+        };
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(basic_function())
+            .controller(controller)
+            .platform(Platform::Aws)
+            .with_dependency(
+                Network::new("default-network".into())
+                    .settings(settings.network.clone().unwrap())
+                    .build(),
+                AwsNetworkController::mock_ready("vpc-test", 2),
+            )
+            .stack_settings(settings)
+            .service_provider(Arc::new(provider))
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+        let error = executor.step().await.expect_err("wait exhausted");
+        assert!(
+            error.to_string().contains("45 minutes") && error.to_string().contains("eni-held"),
+            "{error}"
+        );
+        assert_eq!(
+            executor
+                .internal_state::<AwsWorkerController>()
+                .unwrap()
+                .vpc_eni_wait_started_at,
+            None
         );
     }
 
@@ -8409,7 +8670,7 @@ mod tests {
             let mut controller: AwsWorkerController =
                 serde_json::from_value(resource.internal_state.clone().unwrap()).unwrap();
             controller.vpc_eni_wait_started_at =
-                Some(chrono::Utc::now() - chrono::Duration::seconds(20 * 60));
+                Some(chrono::Utc::now() - chrono::Duration::seconds(45 * 60));
             resource.internal_state = Some(serialize_controller(&controller).unwrap());
         } else {
             detached.delete_async().await;
