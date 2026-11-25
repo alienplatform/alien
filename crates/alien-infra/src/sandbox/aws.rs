@@ -7951,7 +7951,7 @@ mod tests {
             .run_microvm(
                 &live.image,
                 &old,
-                "harness-old-after",
+                &format!("harness-old-after-{}", uuid::Uuid::new_v4().simple()),
                 None,
                 vec![],
                 None,
@@ -7969,7 +7969,7 @@ mod tests {
             .run_microvm(
                 &live.image,
                 &paused,
-                "harness-paused-after",
+                &format!("harness-paused-after-{}", uuid::Uuid::new_v4().simple()),
                 None,
                 vec![],
                 None,
@@ -8051,6 +8051,33 @@ mod tests {
             .find(|r| r.version == age)
             .expect("still tracked");
         assert!(entry.inactive_at.is_none(), "the state no longer calls it inactive");
+    }
+
+    /// Real AWS: the old workload still starts a new session on `PROBE_V_OLD`.
+    #[tokio::test]
+    #[ignore]
+    async fn live_blocked_rollout_old_workload_still_launches() {
+        use alien_aws_clients::lambda_microvms::LambdaMicrovmsApi;
+        let live = LiveHarness::from_env();
+        let old = std::env::var("PROBE_V_OLD").expect("PROBE_V_OLD");
+        let vm = live
+            .client
+            .run_microvm(
+                &live.image,
+                &old,
+                &format!("harness-old-final-{}", uuid::Uuid::new_v4().simple()),
+                None,
+                vec![],
+                None,
+                Some(600),
+                None,
+            )
+            .await
+            .expect("the old workload starts a session on its version");
+        println!("new session on {old}: {:?}", vm.microvm_id);
+        if let Some(id) = vm.microvm_id {
+            let _ = live.client.terminate_microvm(&id).await;
+        }
     }
 
     /// Real AWS: after the retirement steps, neither session's version was retired or
