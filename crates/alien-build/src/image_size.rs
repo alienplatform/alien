@@ -13,7 +13,12 @@ use serde_json::Value;
 /// Largest JSON document (index, manifest) read from an archive.
 const MAX_DOCUMENT_BYTES: u64 = 1 << 20;
 
-/// The size in bytes of the filesystem the image's layers produce when applied in order, or
+/// Block size a file's size is rounded up to: a filesystem stores whole blocks, so an image of
+/// many small files takes more disk than the sum of its file sizes.
+const BLOCK_BYTES: u64 = 4096;
+
+/// The disk in bytes, in whole 4 KiB blocks per file, that the filesystem the image's layers
+/// produce when applied in order takes, or
 /// `None` when it cannot be measured (an unreadable archive or a layer compression this reader
 /// does not decode). `None` skips the size check; it never blocks a build.
 pub(crate) fn uncompressed_size(archive: &Path) -> Option<u64> {
@@ -134,7 +139,10 @@ fn read_layer(layer: impl Read, files: &mut BTreeMap<String, u64>) -> io::Result
             files.remove(&target);
             remove_under(files, &target);
         } else if entry.header().entry_type().is_file() {
-            files.insert(path, entry.header().size()?);
+            files.insert(
+                path,
+                entry.header().size()?.div_ceil(BLOCK_BYTES) * BLOCK_BYTES,
+            );
         } else if !entry.header().entry_type().is_dir() {
             // A link or special file occupies the name but no data.
             files.insert(path, 0);
@@ -200,14 +208,15 @@ mod tests {
         file
     }
 
-    /// Layers add up, compressed or not, and a file a later layer rewrites counts once.
+    /// Layers add up, compressed or not, a file a later layer rewrites counts once, and each file
+    /// takes whole blocks.
     #[test]
     fn layers_are_summed_and_an_overwritten_file_counts_once() {
         let file = archive(vec![
             layer(&[("usr/a", 1000), ("usr/b", 500)], true),
             layer(&[("usr/a", 300), ("opt/c", 200)], false),
         ]);
-        assert_eq!(uncompressed_size(file.path()), Some(300 + 500 + 200));
+        assert_eq!(uncompressed_size(file.path()), Some(4096 * 3));
     }
 
     /// A whiteout removes the file; an opaque marker removes the directory's earlier content.
@@ -218,7 +227,7 @@ mod tests {
             layer(&[("var/.wh.x", 0)], true),
             layer(&[("etc/.wh..wh..opq", 0), ("etc/new", 10)], true),
         ]);
-        assert_eq!(uncompressed_size(file.path()), Some(100 + 10));
+        assert_eq!(uncompressed_size(file.path()), Some(4096 * 2));
     }
 
     /// An archive that cannot be read is unmeasured rather than an error.
