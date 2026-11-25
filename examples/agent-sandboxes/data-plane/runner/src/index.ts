@@ -255,15 +255,20 @@ receiver.command("end-processes", async input => {
     let exitCode: number | null = null
     const decoder = new StringDecoder("utf8")
     let text = ""
+    let errText = ""
     for await (const frame of agent.runCommand(sandboxId, "sh", {
       args: ["-c", SWEEP_SCRIPT, "sweep-script", mode],
       timeoutMs: 30_000,
     })) {
       if (frame.kind === "stdout") text += decoder.write(frame.data)
+      else if (frame.kind === "stderr") errText += Buffer.from(frame.data).toString("utf8")
       else if (frame.kind === "exit") exitCode = frame.exitCode
     }
     text += decoder.end()
-    if (exitCode !== 0) throw new Error(`the process ${mode} exited with ${exitCode}`)
+    if (exitCode !== 0)
+      throw new Error(
+        `the process ${mode} exited with ${exitCode}${errText.trim() ? `: ${errText.trim()}` : ""}`,
+      )
     pids.push(...text.split("\n").filter(Boolean))
     return pids
   }

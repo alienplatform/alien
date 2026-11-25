@@ -13,6 +13,9 @@
 // sandbox is clean); the runner lists again after a sweep and refuses to go on if anything is
 // still there.
 //
+// Run as root, the sweep refuses (exit 1, "the sweep must run as the sandbox user, not root"):
+// it would end the runtime's own helpers. The runner then fails the switch and no turn starts.
+//
 // `$SWEEP_ROOT` (optional) limits both modes to the processes below one pid; the tests use it
 // to run the script on a machine that has other processes.
 
@@ -21,6 +24,8 @@ mode="$1"
 self=$$
 me=$(sed -n 's/^Uid:[[:space:]]*\([0-9]*\).*/\1/p' /proc/$$/status)
 [ -n "$me" ] || { echo "cannot read the sweep's own uid" >&2; exit 1; }
+# Root's processes include the runtime's own helpers: never end them. The switch fails closed.
+[ "$me" != 0 ] || { echo "the sweep must run as the sandbox user, not root" >&2; exit 1; }
 ppid_of() { sed -n 's/^PPid:[[:space:]]*//p' "/proc/$1/status" 2>/dev/null; }
 
 # This script and the processes that started it stay.

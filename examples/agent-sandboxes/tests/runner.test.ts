@@ -92,7 +92,7 @@ describe("ending what a thread left running", () => {
   // namespace cannot be made the test is skipped.
   const unshare = spawnSync("unshare", [
     "--user",
-    "--map-root-user",
+    "--map-user=1000",
     "--pid",
     "--fork",
     "--mount-proc",
@@ -101,7 +101,7 @@ describe("ending what a thread left running", () => {
   const run = (script: string) =>
     spawnSync(
       "unshare",
-      ["--user", "--map-root-user", "--pid", "--fork", "--mount-proc", "sh", "-c", script, "outer"],
+      ["--user", "--map-user=1000", "--pid", "--fork", "--mount-proc", "sh", "-c", script, "outer"],
       { encoding: "utf8", env: { PATH: process.env.PATH, SWEEP: SWEEP_SCRIPT } },
     )
 
@@ -128,6 +128,37 @@ describe("ending what a thread left running", () => {
       expect(result.stdout).not.toContain("before: 0")
     },
   )
+})
+
+describe("the sweep as root", () => {
+  const ns = spawnSync("unshare", [
+    "--user",
+    "--map-root-user",
+    "--pid",
+    "--fork",
+    "--mount-proc",
+    "true",
+  ])
+  it.skipIf(ns.status !== 0)("refuses, ends nothing and exits non-zero", () => {
+    const result = spawnSync(
+      "unshare",
+      [
+        "--user",
+        "--map-root-user",
+        "--pid",
+        "--fork",
+        "--mount-proc",
+        "sh",
+        "-c",
+        'sleep 500 & sleep 0.2; sh -c "$SWEEP" sweep sweep; echo "exit: $?"; kill -0 $! && echo "sleep alive"',
+        "outer",
+      ],
+      { encoding: "utf8", env: { PATH: process.env.PATH, SWEEP: SWEEP_SCRIPT } },
+    )
+    expect(result.stderr).toContain("the sweep must run as the sandbox user, not root")
+    expect(result.stdout).toContain("exit: 1")
+    expect(result.stdout).toContain("sleep alive")
+  })
 })
 
 describe("the sweep and process owners", () => {
