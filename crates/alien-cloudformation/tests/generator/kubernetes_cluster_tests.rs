@@ -1,6 +1,8 @@
 //! EKS CloudFormation target coverage.
 
-use super::helpers::{render_built_ins_target, render_built_ins_template};
+use super::helpers::{
+    custom_resource_registration, render_built_ins_target, render_built_ins_template,
+};
 use alien_cloudformation::{CloudFormationTarget, RegistrationMode};
 use alien_core::{
     CapacityGroup, ComputeCluster, ComputePoolSelection, ComputeSettings,
@@ -463,4 +465,66 @@ fn eks_requires_two_zones_while_native_aws_retains_single_zone_networking() {
         "aws",
         "single-zone AWS network",
     );
+}
+
+fn contains_null(value: &serde_yaml::Value) -> bool {
+    match value {
+        serde_yaml::Value::Null => true,
+        serde_yaml::Value::Sequence(items) => items.iter().any(contains_null),
+        serde_yaml::Value::Mapping(map) => map
+            .iter()
+            .any(|(k, v)| contains_null(k) || contains_null(v)),
+        serde_yaml::Value::Tagged(tagged) => contains_null(&tagged.value),
+        _ => false,
+    }
+}
+
+/// CloudFormation rejects `null` anywhere in a template, so the Kubernetes
+/// registration omits `ManagementConfig` instead of setting it to null.
+#[test]
+fn eks_registration_omits_management_config_and_template_has_no_null() {
+    let stack = Stack::new("kubernetes".to_string())
+        .add(
+            KubernetesCluster::new("kubernetes".to_string())
+                .provider(KubernetesClusterProvider::Eks)
+                .ownership(KubernetesClusterOwnership::Managed)
+                .namespace("alien".to_string())
+                .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+
+    for registration in [
+        custom_resource_registration(),
+        RegistrationMode::OutputsFallback,
+    ] {
+        let yaml = render_built_ins_target(
+            &stack,
+            StackSettings::default(),
+            registration,
+            CloudFormationTarget::Eks,
+            "kubernetes",
+            "eks no null",
+        );
+        let parsed: serde_yaml::Value = serde_yaml::from_str(&yaml).expect("valid YAML");
+        assert!(
+            !contains_null(&parsed),
+            "rendered template contains a null value:\n{yaml}"
+        );
+    }
+
+    let yaml = render_built_ins_target(
+        &stack,
+        StackSettings::default(),
+        custom_resource_registration(),
+        CloudFormationTarget::Eks,
+        "kubernetes",
+        "eks registration",
+    );
+    let parsed: serde_yaml::Value = serde_yaml::from_str(&yaml).unwrap();
+    let props = &parsed["Resources"]["DeploymentRegistration"]["Properties"];
+    assert!(props.is_mapping(), "registration resource missing:\n{yaml}");
+    assert!(props.get("ManagementConfig").is_none());
+    assert!(props.get("StackSettings").is_some());
 }

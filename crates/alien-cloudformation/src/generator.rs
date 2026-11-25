@@ -3646,7 +3646,7 @@ fn is_iam_role_arn(arn: &str) -> bool {
 fn add_custom_resource(
     template: &mut CfTemplate,
     service_token: CfExpression,
-    management_config: CfExpression,
+    management_config: Option<CfExpression>,
     stack_settings: CfExpression,
     options: &CloudFormationOptions<'_>,
     resources: CfExpression,
@@ -3707,10 +3707,20 @@ fn add_custom_resource(
         "SetupImportFormatVersion".to_string() => CfExpression::from(CURRENT_SETUP_IMPORT_FORMAT_VERSION),
         "SetupFingerprint".to_string() => CfExpression::from(options.setup_fingerprint.clone()),
         "SetupFingerprintVersion".to_string() => CfExpression::from(options.setup_fingerprint_version),
-        "ManagementConfig".to_string() => management_config,
         "StackSettings".to_string() => stack_settings,
         "Resources".to_string() => resources,
     };
+    if let Some(management_config) = management_config {
+        // Keep the property where it always was, between the setup fields and
+        // `StackSettings`, so AWS templates render byte-identically.
+        let position = resource
+            .properties
+            .get_index_of("StackSettings")
+            .unwrap_or(resource.properties.len());
+        resource
+            .properties
+            .shift_insert(position, "ManagementConfig".to_string(), management_config);
+    }
     // What setup reports about protection; the control plane shows it and trusts nothing
     // else from it.
     if let Some(signing) = &options.stack_settings.signing {
@@ -3791,7 +3801,7 @@ fn add_setup_started_resource(
 
 fn add_outputs(
     template: &mut CfTemplate,
-    management_config: CfExpression,
+    management_config: Option<CfExpression>,
     stack_settings: CfExpression,
     options: &CloudFormationOptions<'_>,
     resources: &[RegistrationEntry],
@@ -3882,10 +3892,10 @@ fn add_outputs(
     Ok(())
 }
 
-fn json_output_value(value: CfExpression) -> CfExpression {
+fn json_output_value(value: Option<CfExpression>) -> CfExpression {
     match value {
-        CfExpression::Null => CfExpression::from("null"),
-        value => CfExpression::to_json_string(value),
+        None => CfExpression::from("null"),
+        Some(value) => CfExpression::to_json_string(value),
     }
 }
 
@@ -4392,18 +4402,20 @@ fn domains_expression(stack: &Stack, target: CloudFormationTarget) -> CfExpressi
     )
 }
 
-fn management_config_expression(target: CloudFormationTarget) -> CfExpression {
+/// `None` for Kubernetes targets: the property is left out of the registration
+/// because CloudFormation rejects `null` values in templates.
+fn management_config_expression(target: CloudFormationTarget) -> Option<CfExpression> {
     if target.is_kubernetes() {
-        return CfExpression::Null;
+        return None;
     }
 
-    CfExpression::object([
+    Some(CfExpression::object([
         ("platform", CfExpression::from("aws")),
         (
             "managingRoleArn",
             CfExpression::ref_(PARAM_MANAGING_ROLE_ARN),
         ),
-    ])
+    ]))
 }
 
 fn string_parameter(

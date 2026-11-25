@@ -717,7 +717,6 @@ Resources:
       SetupImportFormatVersion: 1
       SetupFingerprint: test
       SetupFingerprintVersion: 1
-      ManagementConfig: null
       StackSettings:
         deploymentModel: push
         endpointAccess:
