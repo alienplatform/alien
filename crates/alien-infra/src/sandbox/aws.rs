@@ -1755,6 +1755,10 @@ impl AwsSandboxController {
             refs.iter().any(|dependency| dependency.id() == resource_id)
         };
         let mut found = DependentVersions::default();
+        // Linked dependents that do not observe bindings, with the compute cluster each
+        // runs on. A cluster that answered completely covers them (see below).
+        let mut legacy: Vec<(String, Option<String>)> = Vec::new();
+        let mut proved_clusters = std::collections::BTreeSet::<String>::new();
         for (id, state) in &ctx.state.resources {
             let desired = ctx.desired_stack.resources.get(id);
             let linked = links_sandbox(&state.dependencies)
@@ -1789,7 +1793,10 @@ impl AwsSandboxController {
                 Err(_) => Ok(LaunchableSandboxVersions::NotObserved),
             };
             match observed {
-                Ok(LaunchableSandboxVersions::Known(versions)) => found.named.extend(versions),
+                Ok(LaunchableSandboxVersions::Known(versions)) => {
+                    proved_clusters.insert(id.clone());
+                    found.named.extend(versions)
+                }
                 // A resource that never linked this sandbox and does not observe bindings
                 // holds none. One that observes its scheduler's whole inventory answers for
                 // every instance it can see, including a replica a finished rollout left
@@ -1803,7 +1810,12 @@ impl AwsSandboxController {
                             state.status == ResourceStatus::Running && state.config == entry.config
                         });
                     if !settled {
-                        found.unproven.push(id.clone());
+                        // Only a container names a cluster that could observe it.
+                        let cluster = state
+                            .config
+                            .downcast_ref::<alien_core::Container>()
+                            .and_then(|container| container.cluster.clone());
+                        legacy.push((id.clone(), cluster));
                     }
                 }
                 Ok(LaunchableSandboxVersions::Unproven { reason }) => {
@@ -1824,6 +1836,16 @@ impl AwsSandboxController {
                     );
                     found.unproven.push(id.clone());
                 }
+            }
+        }
+        // A container runs on the compute cluster its saved config names, and that cluster's
+        // controller reports every replica its scheduler holds, whichever release linked
+        // it. When that exact cluster answered completely, the container is proven and the
+        // older config comparison, which only a release can satisfy, no longer applies.
+        // A worker, or a container whose cluster is unknown or did not answer, stays unproven.
+        for (id, cluster) in legacy {
+            if !cluster.is_some_and(|cluster| proved_clusters.contains(&cluster)) {
+                found.unproven.push(id);
             }
         }
         found
@@ -7818,6 +7840,72 @@ mod tests {
             executor
         }
 
+        /// A saved container on `cluster_id` whose controller does not observe bindings, and a
+        /// saved compute cluster that answers `cluster_answer`.
+        pub(super) async fn executor_with_container_on_cluster(
+            controller: AwsSandboxController,
+            client: MockLambdaMicrovmsApi,
+            container_cluster: Option<&str>,
+            cluster_answer: Option<LaunchableSandboxVersions>,
+        ) -> SingleControllerExecutor {
+            let mut executor = SingleControllerExecutor::builder()
+                .resource(sandbox_with_bundle(
+                    "s3://alien-bundles-test/sandbox/next.zip",
+                ))
+                .controller(controller)
+                .platform(Platform::Aws)
+                .service_provider(provider(client))
+                .build()
+                .await
+                .expect("executor should build");
+            let mut container = alien_core::Container::new("api".to_string())
+                .code(alien_core::ContainerCode::Image {
+                    image: "123456789012.dkr.ecr.us-east-1.amazonaws.com/api:latest".to_string(),
+                })
+                .cpu(alien_core::ResourceSpec {
+                    min: "1".to_string(),
+                    desired: "1".to_string(),
+                })
+                .memory(alien_core::ResourceSpec {
+                    min: "1Gi".to_string(),
+                    desired: "1Gi".to_string(),
+                })
+                .permissions("old".to_string())
+                .link(&sandbox())
+                .build();
+            container.cluster = container_cluster.map(str::to_string);
+            let mut saved = alien_core::StackResourceState::builder()
+                .resource_type(alien_core::Container::RESOURCE_TYPE.to_string())
+                .status(ResourceStatus::Running)
+                .config(alien_core::Resource::new(container))
+                .lifecycle(ResourceLifecycle::Live)
+                .build();
+            saved
+                .set_internal_controller(Some(Box::new(crate::TestWorkerController::default())))
+                .unwrap();
+            executor.insert_saved_resource("api", saved);
+            let cluster = Worker::new("compute".to_string())
+                .code(WorkerCode::Image {
+                    image: "123456789012.dkr.ecr.us-east-1.amazonaws.com/api:latest".to_string(),
+                })
+                .permissions("old".to_string())
+                .build();
+            let mut saved = alien_core::StackResourceState::builder()
+                .resource_type(alien_core::Worker::RESOURCE_TYPE.to_string())
+                .status(ResourceStatus::Running)
+                .config(alien_core::Resource::new(cluster))
+                .lifecycle(ResourceLifecycle::Live)
+                .build();
+            saved
+                .set_internal_controller(Some(Box::new(crate::TestWorkerController {
+                    launchable_sandbox_versions: cluster_answer,
+                    ..Default::default()
+                })))
+                .unwrap();
+            executor.insert_saved_resource("compute", saved);
+            executor
+        }
+
         pub(super) fn known(versions: &[&str]) -> Option<LaunchableSandboxVersions> {
             Some(LaunchableSandboxVersions::Known(
                 versions.iter().map(|v| v.to_string()).collect(),
@@ -8053,5 +8141,41 @@ mod tests {
         }
         let retired = image.retire_calls.lock().unwrap().clone();
         assert!(retired.iter().any(|v| v == "30.0"), "{retired:?}");
+    }
+    /// A container whose controller does not observe bindings is covered by the compute
+    /// cluster its saved config names, when that cluster answered completely: the older
+    /// config comparison, which a blocked rollout can never satisfy, does not apply. A cluster
+    /// that did not answer, or a container on another cluster, keeps every replaced version.
+    #[tokio::test]
+    async fn a_container_is_covered_only_by_its_own_proven_cluster() {
+        use blocked_rollout::*;
+        for (container_cluster, answer, reclaims) in [
+            (Some("compute"), known(&["30.0"]), true),
+            (Some("other"), known(&["30.0"]), false),
+            (None, known(&["30.0"]), false),
+            (
+                Some("compute"),
+                Some(LaunchableSandboxVersions::Unproven {
+                    reason: "a machine is silent".to_string(),
+                }),
+                false,
+            ),
+            (Some("compute"), None, false),
+        ] {
+            let image = FakeImage::at_cap();
+            let mut executor = executor_with_container_on_cluster(
+                blocked_controller(),
+                image.client(),
+                container_cluster,
+                answer,
+            )
+            .await;
+            for _ in 0..4 {
+                let _ = executor.step().await;
+            }
+            let retired = image.retire_calls.lock().unwrap().clone();
+            assert_eq!(!retired.is_empty(), reclaims, "{container_cluster:?}: {retired:?}");
+            assert!(!retired.iter().any(|v| v == "30.0"), "{retired:?}");
+        }
     }
 }
