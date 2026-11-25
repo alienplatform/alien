@@ -1395,9 +1395,11 @@ impl Sandbox {
         }
         let advice = match MICROVM_TIERS.iter().find(|t| t.fits_image(image_bytes)) {
             Some(larger) => format!(
-                "raise the sandbox limits to at least {}Mi disk, {}Mi memory and {} cpu, or \
+                "raise the sandbox limits to at least {} disk, {} memory and {} cpu, or \
                  make the image smaller",
-                larger.max_disk_mib, larger.peak_memory_mib, larger.peak_vcpu
+                format_mib(larger.max_disk_mib as u64),
+                format_mib(larger.peak_memory_mib as u64),
+                larger.peak_vcpu
             ),
             None => "no AWS MicroVM size has a disk this large; make the image smaller".to_string(),
         };
@@ -3095,9 +3097,9 @@ mod tests {
         let text = error.to_string();
         assert!(text.contains("6042Mi"), "image size: {text}");
         assert!(text.contains("8Gi disk"), "disk of the chosen size: {text}");
-        assert!(text.contains("16384Mi disk"), "limits to raise: {text}");
+        assert!(text.contains("16Gi disk"), "limits to raise: {text}");
         assert!(
-            text.contains("16384Mi memory") && text.contains("8 cpu"),
+            text.contains("16Gi memory") && text.contains("8 cpu"),
             "{text}"
         );
     }

@@ -3719,7 +3719,7 @@ mod tests {
         let text = format!("{error:?}");
         assert!(text.contains("6200Mi"), "image size in the message: {text}");
         assert!(text.contains("8Gi disk"), "disk in the message: {text}");
-        assert!(text.contains("16384Mi disk"), "limits to raise: {text}");
+        assert!(text.contains("16Gi disk"), "limits to raise: {text}");
     }
 
     /// The restart that finds its image already built: a create whose response was lost and
