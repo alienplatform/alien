@@ -12,6 +12,18 @@ fn mapping_update(max: i32) -> UpdateEventSourceMappingRequest {
         .build()
 }
 
+/// Lambda refuses updates while a mapping is still changing state.
+async fn wait_enabled(client: &LambdaClient, uuid: &str) {
+    for _ in 0..60 {
+        let mapping = client.get_event_source_mapping(uuid).await.unwrap();
+        if mapping.state.as_deref() == Some("Enabled") {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    }
+    panic!("mapping {uuid} did not reach Enabled");
+}
+
 #[tokio::test]
 #[ignore = "requires AWS credentials, a function image, an execution role and an SQS queue"]
 async fn live_concurrency_and_mapping_order() {
@@ -43,7 +55,12 @@ async fn live_concurrency_and_mapping_order() {
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
     }
 
-    let result = async {
+    // The body runs in its own task so a failed assertion cannot skip the cleanup below.
+    let body_client = client.clone();
+    let body_name = name.clone();
+    let result = tokio::spawn(async move {
+        let client = body_client;
+        let name = body_name;
         client.put_function_concurrency(&name, 2).await.unwrap();
         let mapping = client
             .create_event_source_mapping(
@@ -58,6 +75,7 @@ async fn live_concurrency_and_mapping_order() {
             .await
             .unwrap();
         let uuid = mapping.uuid.clone().unwrap();
+        wait_enabled(&client, &uuid).await;
         println!("created mapping {uuid} at concurrency 2");
 
         // The old order for a raise: mapping first. AWS refuses and the client must not retry it.
@@ -74,10 +92,12 @@ async fn live_concurrency_and_mapping_order() {
 
         // The new order for a raise: concurrency first, then the mapping.
         client.put_function_concurrency(&name, 16).await.unwrap();
+        wait_enabled(&client, &uuid).await;
         client
             .update_event_source_mapping(&uuid, mapping_update(16))
             .await
             .unwrap();
+        wait_enabled(&client, &uuid).await;
         println!("raise 2 -> 16 converged (concurrency, then mapping)");
 
         // The new order for a lowering: mapping first, then concurrency.
@@ -85,6 +105,7 @@ async fn live_concurrency_and_mapping_order() {
             .update_event_source_mapping(&uuid, mapping_update(2))
             .await
             .unwrap();
+        wait_enabled(&client, &uuid).await;
         client.put_function_concurrency(&name, 2).await.unwrap();
         println!("lower 16 -> 2 converged (mapping, then concurrency)");
 
@@ -93,9 +114,12 @@ async fn live_concurrency_and_mapping_order() {
             .update_event_source_mapping(&uuid, mapping_update(16))
             .await
             .expect_err("still refused at reserved 2");
+        wait_enabled(&client, &uuid).await;
         client.delete_event_source_mapping(&uuid).await.unwrap();
-    }
+    })
     .await;
     client.delete_function(&name, None).await.ok();
-    result
+    if let Err(error) = result {
+        std::panic::resume_unwind(error.into_panic());
+    }
 }

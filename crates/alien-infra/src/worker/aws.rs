@@ -4749,14 +4749,11 @@ impl AwsWorkerController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Worker>()?;
+        // Always checked against the live function: a raise or removal normally went out before
+        // the mappings, but a deployment saved here by an older release did not get it.
         let prev_config = ctx.previous_resource_config::<Worker>()?;
-
-        if concurrency_precedes_mappings(prev_config.concurrency_limit, config.concurrency_limit) {
-            debug!(worker=%config.id, "Concurrency was applied before the event source mappings");
-        } else {
-            self.apply_reserved_concurrency(ctx, &config, &prev_config)
-                .await?;
-        }
+        self.apply_reserved_concurrency(ctx, &config, &prev_config)
+            .await?;
 
         Ok(HandlerAction::Continue {
             state: Ready,
@@ -6214,9 +6211,21 @@ impl AwsWorkerController {
         // configuration (UpdateConfigStart).
         if verifier::protected_statements(ctx, &config.id)?.is_some() {
             debug!(worker=%config.id, "Concurrency was part of the verifier's update");
-        } else if config.concurrency_limit != prev_config.concurrency_limit {
-            match config.concurrency_limit {
-                Some(limit) => {
+        } else if config.concurrency_limit == prev_config.concurrency_limit {
+            debug!(worker=%config.id, "Concurrency limit unchanged, skipping");
+        } else {
+            // Compare with the live function, not with the previous config: a deployment saved
+            // here by an older release, or one that failed part-way, may not have had the write.
+            let live = client
+                .get_function_concurrency(&aws_worker_name)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to read worker reserved concurrency".to_string(),
+                    resource_id: Some(config.id.clone()),
+                })?
+                .reserved_concurrent_executions;
+            match (config.concurrency_limit, live) {
+                (Some(limit), live) if live != Some(limit) => {
                     info!(worker=%config.id, limit=%limit, "Updating reserved concurrency on worker");
                     client
                         .put_function_concurrency(&aws_worker_name, limit)
@@ -6227,7 +6236,7 @@ impl AwsWorkerController {
                             resource_id: Some(config.id.clone()),
                         })?;
                 }
-                None => {
+                (None, Some(_)) => {
                     info!(worker=%config.id, "Removing reserved concurrency from worker");
                     client
                         .delete_function_concurrency(&aws_worker_name)
@@ -6237,9 +6246,8 @@ impl AwsWorkerController {
                             resource_id: Some(config.id.clone()),
                         })?;
                 }
+                _ => debug!(worker=%config.id, "Reserved concurrency already matches, skipping"),
             }
-        } else {
-            debug!(worker=%config.id, "Concurrency limit unchanged, skipping");
         }
         Ok(())
     }
@@ -6984,17 +6992,28 @@ mod tests {
                 ));
                 Ok(mapping())
             });
+        let live = Arc::new(std::sync::Mutex::new(previous_limit));
+        let state = live.clone();
+        lambda.expect_get_function_concurrency().returning(move |_| {
+            Ok(alien_aws_clients::lambda::FunctionConcurrency {
+                reserved_concurrent_executions: *state.lock().unwrap(),
+            })
+        });
         let log = events.clone();
+        let state = live.clone();
         lambda
             .expect_put_function_concurrency()
             .returning(move |_, limit| {
+                *state.lock().unwrap() = Some(limit);
                 log.lock().unwrap().push(format!("put:{limit}"));
                 Ok(())
             });
         let log = events.clone();
+        let state = live.clone();
         lambda
             .expect_delete_function_concurrency()
             .returning(move |_| {
+                *state.lock().unwrap() = None;
                 log.lock().unwrap().push("delete".to_string());
                 Ok(())
             });
@@ -7052,6 +7071,69 @@ mod tests {
                 .state,
             AwsWorkerState::Ready
         );
+        assert_eq!(*events.lock().unwrap(), expected);
+    }
+
+    #[rstest::rstest]
+    #[case::raise_not_applied(Some(2), Some(16), Some(2), "put:16")]
+    #[case::removal_not_applied(Some(2), None, Some(2), "delete")]
+    #[case::already_applied(Some(2), Some(16), Some(16), "")]
+    #[tokio::test]
+    async fn updating_concurrency_resumed_from_an_old_save_applies_what_is_missing(
+        #[case] previous_limit: Option<u32>,
+        #[case] desired_limit: Option<u32>,
+        #[case] live_limit: Option<u32>,
+        #[case] expected: &str,
+    ) {
+        let mut worker = function_with_queue_trigger();
+        let mut previous = worker.clone();
+        previous.concurrency_limit = previous_limit;
+        worker.concurrency_limit = desired_limit;
+        let events = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let mut lambda = MockLambdaApi::new();
+        lambda.expect_get_function_concurrency().returning(move |_| {
+            Ok(alien_aws_clients::lambda::FunctionConcurrency {
+                reserved_concurrent_executions: live_limit,
+            })
+        });
+        let log = events.clone();
+        lambda
+            .expect_put_function_concurrency()
+            .returning(move |_, limit| {
+                log.lock().unwrap().push(format!("put:{limit}"));
+                Ok(())
+            });
+        let log = events.clone();
+        lambda
+            .expect_delete_function_concurrency()
+            .returning(move |_| {
+                log.lock().unwrap().push("delete".to_string());
+                Ok(())
+            });
+        let provider = setup_mock_service_provider(Arc::new(lambda), None, None);
+        let mut controller = AwsWorkerController::mock_ready("test-queue-func");
+        controller.state = AwsWorkerState::UpdatingConcurrency;
+        let controller: AwsWorkerController =
+            serde_json::from_value(serde_json::to_value(controller).unwrap()).unwrap();
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(worker)
+            .previous_resource(previous)
+            .controller(controller)
+            .platform(Platform::Aws)
+            .service_provider(provider)
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+        executor.step().await.expect("concurrency step");
+        assert_eq!(
+            executor
+                .internal_state::<AwsWorkerController>()
+                .unwrap()
+                .state,
+            AwsWorkerState::Ready
+        );
+        let expected: Vec<&str> = if expected.is_empty() { vec![] } else { vec![expected] };
         assert_eq!(*events.lock().unwrap(), expected);
     }
 
@@ -7124,6 +7206,12 @@ mod tests {
                 })
                 .returning(move |_, _| Ok(mapping()));
             // Mode 2 raises the limit, which now reaches the function before the mappings.
+            let live_limit = previous.concurrency_limit;
+            lambda.expect_get_function_concurrency().returning(move |_| {
+                Ok(alien_aws_clients::lambda::FunctionConcurrency {
+                    reserved_concurrent_executions: live_limit,
+                })
+            });
             lambda
                 .expect_put_function_concurrency()
                 .times(if mode == 2 { 1 } else { 0 })
@@ -7478,6 +7566,13 @@ mod tests {
 
         // Mock concurrency operations (may or may not be called depending on worker config)
         mock_lambda
+            .expect_get_function_concurrency()
+            .returning(|_| {
+                Ok(alien_aws_clients::lambda::FunctionConcurrency {
+                    reserved_concurrent_executions: None,
+                })
+            });
+        mock_lambda
             .expect_put_function_concurrency()
             .returning(|_, _| Ok(()));
         mock_lambda
@@ -7546,6 +7641,13 @@ mod tests {
         }
 
         // Mock concurrency operations (may or may not be called depending on worker config)
+        mock_lambda
+            .expect_get_function_concurrency()
+            .returning(|_| {
+                Ok(alien_aws_clients::lambda::FunctionConcurrency {
+                    reserved_concurrent_executions: None,
+                })
+            });
         mock_lambda
             .expect_put_function_concurrency()
             .returning(|_, _| Ok(()));
