@@ -3,6 +3,7 @@ pub(crate) mod command_output;
 mod commands_receiver;
 pub mod dependencies;
 mod dockerignore;
+mod image_size;
 pub mod error;
 pub mod gcp_sandbox_image;
 mod lambda_image;
@@ -859,6 +860,15 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
                                         aws_connector,
                                     )
                                     .await?;
+                                    sandbox.image_size_bytes = built_image_size(
+                                        Path::new(&image_uri),
+                                        &settings.get_targets(),
+                                    )
+                                    .await;
+                                    warn_if_over_microvm_disk(
+                                        &sandbox,
+                                        settings.platform.runtime_platform(),
+                                    );
                                     Ok(image_uri)
                                 }
                                 .await
@@ -4708,6 +4718,43 @@ async fn compute_function_content_hash(dir: &Path) -> Result<String> {
     }
 
     Ok(format!("{:x}", hasher.finalize()))
+}
+
+/// The largest uncompressed size across the built architectures, or `None` when any cannot be
+/// measured: the size is only recorded when it is known for every target.
+async fn built_image_size(
+    directory: &Path,
+    targets: &[alien_core::BinaryTarget],
+) -> Option<u64> {
+    let paths: Vec<_> = targets
+        .iter()
+        .map(|target| directory.join(format!("{}.oci.tar", target.runtime_platform_id())))
+        .collect();
+    tokio::task::spawn_blocking(move || {
+        let mut largest = None;
+        for path in paths {
+            let size = image_size::uncompressed_size(&path)?;
+            largest = Some(largest.map_or(size, |current: u64| current.max(size)));
+        }
+        largest
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
+/// Tells the author at release time that an AWS sandbox image will not build, as an early
+/// warning only: the controller makes the refusal, and a release is never blocked on a size.
+fn warn_if_over_microvm_disk(sandbox: &Sandbox, platform: Platform) {
+    if platform != Platform::Aws {
+        return;
+    }
+    let Some(bytes) = sandbox.image_size_bytes else {
+        return;
+    };
+    if let Err(error) = sandbox.check_microvm_image_fits(bytes) {
+        warn!("{error}");
+    }
 }
 
 #[cfg(test)]
