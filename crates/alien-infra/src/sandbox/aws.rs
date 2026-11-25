@@ -1740,7 +1740,8 @@ impl AwsSandboxController {
     /// new version still holds the old one.
     ///
     /// Every resource with saved state that links this sandbox counts, including one whose link
-    /// the pending release removed. A dependent that reports its launchable versions
+    /// the pending release removed. Resources that never linked it are asked too, but only an
+    /// answer that names versions or says it cannot tell counts (see below). A dependent that reports its launchable versions
     /// ([`ResourceController::launchable_sandbox_versions`]) names them, or says it cannot
     /// tell, which keeps every replaced version. A dependent that does not observe bindings is
     /// proven only by the older check: running with the config being applied, which holds the
@@ -1763,7 +1764,7 @@ impl AwsSandboxController {
                     .as_ref()
                     .is_some_and(|previous| links_sandbox(&previous.get_dependencies()))
                 || desired.is_some_and(|entry| links_sandbox(&entry.combined_dependencies()));
-            if id == resource_id || !linked {
+            if id == resource_id {
                 continue;
             }
             // Nothing was ever applied for it: no workload holds a binding.
@@ -1780,13 +1781,20 @@ impl AwsSandboxController {
                         .await
                 }
                 // A workload that exists but whose controller state is gone cannot be asked.
-                Ok(None) => Ok(LaunchableSandboxVersions::Unproven {
+                Ok(None) if linked => Ok(LaunchableSandboxVersions::Unproven {
                     reason: "its controller state is not available".to_string(),
                 }),
-                Err(error) => Err(error),
+                Ok(None) => Ok(LaunchableSandboxVersions::NotObserved),
+                Err(error) if linked => Err(error),
+                Err(_) => Ok(LaunchableSandboxVersions::NotObserved),
             };
             match observed {
                 Ok(LaunchableSandboxVersions::Known(versions)) => found.named.extend(versions),
+                // A resource that never linked this sandbox and does not observe bindings
+                // holds none. One that observes its scheduler's whole inventory answers for
+                // every instance it can see, including a replica a finished rollout left
+                // behind after the link that bound it was removed.
+                Ok(LaunchableSandboxVersions::NotObserved) if !linked => {}
                 Ok(LaunchableSandboxVersions::NotObserved) => {
                     // The older check. A setup-owned consumer holds the binding setup gave it,
                     // which a runtime release does not change.
@@ -7771,6 +7779,45 @@ mod tests {
             executor
         }
 
+        /// A saved workload whose applied config never linked the sandbox, as a scheduler that
+        /// reports every replica of its cluster's inventory answers.
+        pub(super) async fn executor_with_unlinked_scheduler(
+            controller: AwsSandboxController,
+            client: MockLambdaMicrovmsApi,
+            observed: Option<LaunchableSandboxVersions>,
+        ) -> SingleControllerExecutor {
+            let mut executor = SingleControllerExecutor::builder()
+                .resource(sandbox_with_bundle(
+                    "s3://alien-bundles-test/sandbox/next.zip",
+                ))
+                .controller(controller)
+                .platform(Platform::Aws)
+                .service_provider(provider(client))
+                .build()
+                .await
+                .expect("executor should build");
+            let unlinked = Worker::new("scheduler".to_string())
+                .code(WorkerCode::Image {
+                    image: "123456789012.dkr.ecr.us-east-1.amazonaws.com/api:latest".to_string(),
+                })
+                .permissions("old".to_string())
+                .build();
+            let mut saved = alien_core::StackResourceState::builder()
+                .resource_type(alien_core::Worker::RESOURCE_TYPE.to_string())
+                .status(ResourceStatus::Running)
+                .config(alien_core::Resource::new(unlinked))
+                .lifecycle(ResourceLifecycle::Live)
+                .build();
+            saved
+                .set_internal_controller(Some(Box::new(crate::TestWorkerController {
+                    launchable_sandbox_versions: observed,
+                    ..Default::default()
+                })))
+                .unwrap();
+            executor.insert_saved_resource("scheduler", saved);
+            executor
+        }
+
         pub(super) fn known(versions: &[&str]) -> Option<LaunchableSandboxVersions> {
             Some(LaunchableSandboxVersions::Known(
                 versions.iter().map(|v| v.to_string()).collect(),
@@ -7943,6 +7990,55 @@ mod tests {
             !retired.iter().any(|v| v == "12.0" || v == "30.0"),
             "{retired:?}"
         );
+    }
+
+    /// A scheduler whose applied config never named the sandbox but whose cluster still holds a
+    /// replica of an older release (the link was removed and the rollout finished) protects the
+    /// versions that replica names, and one that cannot say keeps every replaced version.
+    #[tokio::test]
+    async fn an_unlinked_scheduler_that_observes_its_replicas_is_counted() {
+        use blocked_rollout::*;
+        let image = FakeImage::at_cap();
+        let mut executor = executor_with_unlinked_scheduler(
+            blocked_controller(),
+            image.client(),
+            known(&["30.0"]),
+        )
+        .await;
+        for _ in 0..4 {
+            let _ = executor.step().await;
+        }
+        let retired = image.retire_calls.lock().unwrap().clone();
+        assert!(!retired.is_empty());
+        assert!(!retired.iter().any(|v| v == "30.0"), "{retired:?}");
+
+        let image = FakeImage::at_cap();
+        let mut executor = executor_with_unlinked_scheduler(
+            blocked_controller(),
+            image.client(),
+            Some(LaunchableSandboxVersions::Unproven {
+                reason: "a machine does not report what it holds".to_string(),
+            }),
+        )
+        .await;
+        for _ in 0..4 {
+            let _ = executor.step().await;
+        }
+        assert!(image.retire_calls.lock().unwrap().is_empty());
+        assert_eq!(*image.build_calls.lock().unwrap(), 0);
+    }
+
+    /// A workload that never linked the sandbox and does not observe bindings holds none.
+    #[tokio::test]
+    async fn an_unlinked_workload_that_does_not_observe_bindings_protects_nothing() {
+        use blocked_rollout::*;
+        let image = FakeImage::at_cap();
+        let mut executor =
+            executor_with_unlinked_scheduler(blocked_controller(), image.client(), None).await;
+        for _ in 0..4 {
+            let _ = executor.step().await;
+        }
+        assert!(!image.retire_calls.lock().unwrap().is_empty());
     }
 
     /// A dependent that reports it holds no binding protects nothing.
