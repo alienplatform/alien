@@ -3928,11 +3928,7 @@ const SETUP_UPDATE_BUSY_MESSAGE: &str =
 fn setup_update_busy_message(body: &str) -> String {
     serde_json::from_str::<serde_json::Value>(body)
         .ok()
-        .and_then(|value| {
-            value
-                .get("message")
-                .and_then(|m| m.as_str().map(str::to_owned))
-        })
+        .and_then(|value| value.get("message").and_then(|m| m.as_str().map(str::to_owned)))
         .filter(|message| !message.is_empty())
         .unwrap_or_else(|| SETUP_UPDATE_BUSY_MESSAGE.to_string())
 }
@@ -3941,11 +3937,7 @@ fn setup_update_busy_message(body: &str) -> String {
 fn setup_update_busy(body: &str) -> bool {
     serde_json::from_str::<serde_json::Value>(body)
         .ok()
-        .and_then(|value| {
-            value
-                .get("code")
-                .and_then(|code| code.as_str().map(str::to_owned))
-        })
+        .and_then(|value| value.get("code").and_then(|code| code.as_str().map(str::to_owned)))
         .is_some_and(|code| code == "SETUP_UPDATE_BUSY")
 }
 
@@ -5210,10 +5202,7 @@ mod tests {
     fn a_busy_refusal_shows_the_platforms_explanation() {
         let body = r#"{"code":"SETUP_UPDATE_BUSY","message":"Another update is in the way. The last update failed (X); retry it or fix it first."}"#;
         assert!(setup_update_busy_message(body).contains("retry it or fix it first"));
-        assert_eq!(
-            setup_update_busy_message("not json"),
-            SETUP_UPDATE_BUSY_MESSAGE
-        );
+        assert_eq!(setup_update_busy_message("not json"), SETUP_UPDATE_BUSY_MESSAGE);
     }
 
     /// A running deployment whose setup is behind is offered the setup update, on the platform
