@@ -360,6 +360,9 @@ async fn fill_the_image_to_the_version_cap() {
     let s3 = S3Client::new(Client::new(), provider());
     let lambda = LambdaMicrovmsClient::new(Client::new(), provider());
     let run = uuid::Uuid::new_v4().simple().to_string()[..6].to_string();
+    // `FILL_KEEP_ACTIVE=1` leaves every earlier version ACTIVE, as an install that never
+    // retired any is: the controller under test has to observe and retire them itself.
+    let keep_active = std::env::var("FILL_KEEP_ACTIVE").is_ok_and(|v| v == "1");
 
     for n in 0..100 {
         let versions = lambda.list_microvm_image_versions(&image).await.unwrap();
@@ -390,6 +393,9 @@ async fn fill_the_image_to_the_version_cap() {
                 let version = rolled.image_version.expect("a version");
                 wait_version(&lambda, &image, &version).await;
                 for old in versions {
+                    if keep_active {
+                        break;
+                    }
                     let old = old.image_version.unwrap();
                     if old != version {
                         // Skip versions already inactive: repeating the call for every old
