@@ -239,6 +239,8 @@ Moments 1 and 2 need no model. Set `WITH_MODEL=0` to run only those; the rest go
 
 Limits accepted to keep the example small: the connector keeps turn tokens and held writes in memory and runs one replica, so a connector restart fails the writes that were waiting and the next turn gets a new token. The control plane keeps threads in a JSON file and runs one process.
 
+User switches within one conversation end the previous user's processes on a best-effort basis; if users must never share anything, give each user their own sandbox.
+
 This example was proven in `alien dev`.
 
 ## Tests

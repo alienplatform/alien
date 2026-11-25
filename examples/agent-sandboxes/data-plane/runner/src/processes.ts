@@ -4,7 +4,7 @@
 // process and Claude Code keeps its conversation on disk. So the switch ends every process in
 // the sandbox that belongs to the sandbox user: the user the sweep itself runs as. Processes of
 // other users (the runtime's own, which the sandbox starts as root) are not the agent's and stay,
-// as do PID 1, the sweep's own command (the shell that runs it and what that shell started), and kernel threads (no command
+// as do PID 1, the sweep's own ancestors, what the sweep's own command started in the last 5 seconds, and kernel threads (no command
 // line). The owner comes from the kernel (the Uid line of /proc/<pid>/status), which the agent
 // cannot change; the sweep does not look at anything else the agent controls, such as
 // environment variables or process names.
@@ -37,13 +37,21 @@ while [ -n "$p" ] && [ "$p" != 0 ]; do
 done
 
 # The command that started the sweep (the runtime wraps every command in a shell with a watchdog
-# beside it) is the topmost ancestor below PID 1: everything under it is the sweep's own.
+# beside it) is the topmost ancestor below PID 1. What it started at the same time as the sweep
+# (the watchdog, ls, sed) is the sweep's own. A runtime that runs every command under one
+# long-lived parent has old background processes under that parent too: those are not spared.
 top=$self
 p=$(ppid_of "$self")
 while [ -n "$p" ] && [ "$p" != 0 ] && [ "$p" != 1 ]; do
   top=$p
   p=$(ppid_of "$p")
 done
+
+# Start time in clock ticks since boot (field 22 of /proc/<pid>/stat; the command name may hold
+# spaces, so cut after its closing parenthesis).
+started() { sed 's/.*) //' "/proc/$1/stat" 2>/dev/null | cut -d' ' -f20; }
+hz=$(getconf CLK_TCK 2>/dev/null || echo 100)
+since=$(( $(started "$self") - 5 * hz ))
 
 # Prints the pids that are left to end.
 candidates() {
@@ -54,15 +62,19 @@ candidates() {
     [ -n "$(tr -d '\000' < "$d/cmdline" 2>/dev/null)" ] || continue
     # Only the sandbox user's processes (the real uid, set by the kernel).
     [ "$(sed -n 's/^Uid:[[:space:]]*\([0-9]*\).*/\1/p' "$d/status" 2>/dev/null)" = "$me" ] || continue
-    # Things the sweep's own command started (ls, tr, sed, the runtime's watchdog) are not the
-    # sandbox's.
+    # Things the sweep's own command started just now (ls, tr, sed, the runtime's watchdog) are
+    # not the sandbox's. Turns are serialized and a switch happens between turns, so nothing
+    # legitimate is more than 5 seconds older than the sweep.
     p=$pid
     ours=
     while [ -n "$p" ] && [ "$p" != 0 ] && [ "$p" != 1 ]; do
       [ "$p" = "$top" ] && ours=1 && break
       p=$(ppid_of "$p")
     done
-    [ -n "$ours" ] && continue
+    if [ -n "$ours" ]; then
+      t=$(started "$pid")
+      [ -n "$t" ] && [ "$t" -ge "$since" ] && continue
+    fi
     if [ -n "$SWEEP_ROOT" ]; then
       p=$pid
       under=

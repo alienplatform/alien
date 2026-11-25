@@ -162,6 +162,42 @@ describe("the sweep's own command wrapper", () => {
   })
 })
 
+describe("a long-lived parent of every command", () => {
+  const ns = spawnSync("unshare", [
+    "--user",
+    "--map-user=1000",
+    "--pid",
+    "--fork",
+    "--mount-proc",
+    "true",
+  ])
+  // The parent has run for a while and an old background process sits under it: it is ended,
+  // while the fresh watchdog of the sweep's own command is spared.
+  it.skipIf(ns.status !== 0)(
+    "still ends old background processes under it",
+    () => {
+      const result = spawnSync(
+        "unshare",
+        [
+          "--user",
+          "--map-user=1000",
+          "--pid",
+          "--fork",
+          "--mount-proc",
+          "sh",
+          "-c",
+          'sh -c \'sleep 600 & sleep 6; ( sleep 31 & wait ) & sh -c "$SWEEP" sweep sweep > /tmp/e.$$; sh -c "$SWEEP" sweep list > /tmp/l.$$; echo "ended: $(wc -l < /tmp/e.$$)"; echo "left: $(wc -l < /tmp/l.$$)"; rm -f /tmp/e.$$ /tmp/l.$$; kill $(jobs -p) 2>/dev/null\'',
+          "outer",
+        ],
+        { encoding: "utf8", env: { PATH: process.env.PATH, SWEEP: SWEEP_SCRIPT } },
+      )
+      expect(result.stdout).toContain("ended: 1")
+      expect(result.stdout).toContain("left: 0")
+    },
+    20000,
+  )
+})
+
 describe("the sweep as root", () => {
   const ns = spawnSync("unshare", [
     "--user",
