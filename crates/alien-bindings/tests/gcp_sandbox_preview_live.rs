@@ -12,7 +12,7 @@
 //!
 //! Env: `GCP_PROJECT`, `GCP_REGION`, `GCP_ENGINE` (bare id), `GCP_IMAGE`, `GCP_PREVIEW_SA`,
 //! `GCP_OWNER_TOKEN`, `GCP_ADMIN_TOKEN`, `GCP_NOEXEC_SA`, `GCP_NOEXEC_TOKEN`. Optional:
-//! `GCP_INTERNET=1` (give the template internet egress; default off), `GCP_PREVIEW_PORTS` (default `8080,8081,8090`), `GCP_DAEMON_TOKEN` (the fixture's bearer).
+//! `GCP_INTERNET=1` (give the template internet egress; default off), `GCP_NETWORK_ATTACHMENT` (full path; the template gets that attachment and private ingress) with `GCP_PRIVATE_ENDPOINT` (`address:port` of the PSC endpoint), `GCP_PREVIEW_PORTS` (default `8080,8081,8090`), `GCP_DAEMON_TOKEN` (the fixture's bearer).
 //!
 //! Two tests, each run by its exact name, because they need different images:
 //!
@@ -91,14 +91,34 @@ fn provider(
     ports: &[u16],
 ) -> GcpAgentPlatformSandbox {
     let iam = alien_gcp_clients::iam::IamClient::new(reqwest::Client::new(), config(token.clone()));
-    GcpAgentPlatformSandbox::new(
-        Arc::new(client(token)),
+    let signer = signer(iam, signer_account);
+    let mut api: Arc<dyn alien_gcp_clients::gcp::agent_platform::AgentPlatformApi> =
+        Arc::new(client(token));
+    // `GCP_PRIVATE_ENDPOINT` (`address:port`) is the PSC endpoint of a template with a network
+    // attachment: its sandboxes answer only there, for `:execute` and for interactive commands.
+    let private = std::env::var("GCP_PRIVATE_ENDPOINT").ok().filter(|v| !v.is_empty());
+    if let Some(endpoint) = &private {
+        api = Arc::new(
+            alien_bindings::providers::sandbox::gcp_private_ingress::PrivateIngressClient::new(
+                api,
+                endpoint.clone(),
+                alien_core::sandbox_image::GCP_AGENT_PLATFORM.port,
+                signer.clone(),
+            ),
+        );
+    }
+    let provider = GcpAgentPlatformSandbox::new(
+        api,
         engine.to_string(),
         template.to_string(),
         Some(3600),
     )
-    .with_preview_signer(signer(iam, signer_account))
-    .with_preview_ports(ports.to_vec())
+    .with_preview_signer(signer)
+    .with_preview_ports(ports.to_vec());
+    match private {
+        Some(endpoint) => provider.with_private_endpoint(endpoint),
+        None => provider,
+    }
 }
 
 /// Signs the edge credential through IAM, or, when `GCP_SIGNER_KEY_FILE` names the signer's own key
@@ -410,10 +430,18 @@ impl Live {
                     }),
                     egress_control_config: Some(EgressControlConfig {
                         internet_access: Some(std::env::var("GCP_INTERNET").is_ok_and(|v| v == "1")),
-                        network_attachment: None,
+                        network_attachment: std::env::var("GCP_NETWORK_ATTACHMENT")
+                            .ok()
+                            .filter(|v| !v.is_empty()),
                         extra: Default::default(),
                     }),
-                    ingress_control_config: None,
+                    ingress_control_config: std::env::var("GCP_NETWORK_ATTACHMENT")
+                        .ok()
+                        .filter(|v| !v.is_empty())
+                        .map(|_| alien_gcp_clients::gcp::agent_platform::IngressControlConfig {
+                            enable_private_service_connect: Some(true),
+                            extra: Default::default(),
+                        }),
                     state: None,
                     extra: Default::default(),
                 },
