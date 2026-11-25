@@ -701,10 +701,7 @@ fn the_verifier_gains_dead_letter_permissions_only_for_a_stack_with_a_dead_lette
     let (roles, bindings) = verifier_custom_roles(&with);
     for (permission, role) in [
         ("pubsub.subscriptions.update", "signing_verifier_queues"),
-        (
-            "resourcemanager.projects.get",
-            "signing_verifier_project_read",
-        ),
+        ("resourcemanager.projects.get", "signing_verifier_project_read"),
     ] {
         let holders: Vec<&String> = roles
             .iter()
