@@ -137,6 +137,21 @@ impl ImageUser<'_> {
     }
 }
 
+/// The name and home directory of `uid`'s entry in an image's /etc/passwd, if it has one.
+pub fn passwd_account(passwd: &str, uid: u32) -> Option<(&str, &str)> {
+    passwd.lines().find_map(|line| {
+        let fields: Vec<_> = line.split(':').collect();
+        (fields.len() >= 6 && fields[2].parse::<u32>() == Ok(uid)).then(|| (fields[0], fields[5]))
+    })
+}
+
+/// Whether a `HOME` or `USER` value from an image can be given to a command. An empty one counts
+/// as unset, as `docker exec` treats an empty `HOME`. One with a NUL cannot be passed to exec, and
+/// the image wrote it, so it is dropped rather than failing the command.
+pub fn usable_account_value(value: &str) -> bool {
+    !value.is_empty() && !value.contains('\0')
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -40,8 +40,11 @@ pub struct ExecRequest {
     /// Working directory, resolved against the sandbox root before use.
     #[serde(default)]
     pub cwd: Option<String>,
-    /// Environment for the command. The agent's own environment is never inherited, so this is
-    /// everything the command gets beyond `PATH` and the uid/gid/session-root contract.
+    /// Environment for the command. It wins over the `PATH`, `HOME` and `USER` the agent sets, but
+    /// not over the uid/gid/session-root variables or the proxy and CA variables the agent sets.
+    /// The agent's own environment is not passed on, except under native-file authorization
+    /// (Azure), where its variables, minus `ALIEN_SANDBOX_*` and credential endpoints, fill in the
+    /// names this leaves out, `HOME` and `USER` included.
     #[serde(default)]
     pub env: BTreeMap<String, String>,
     /// Bytes of encoded reply each output stream may take, if the caller's transport limits one
@@ -281,8 +284,27 @@ pub(crate) fn spawn(
         message: error.to_string(),
     })?;
 
+    let spawn_failed = |message: String| Frame::Error {
+        code: "spawnFailed".to_string(),
+        message,
+    };
+    let passwd = match std::fs::read("/etc/passwd") {
+        // Lossy: an invalid line elsewhere in the file must not cost this uid its entry.
+        Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+        // No account file: the command gets what `docker exec` gives a uid without an entry.
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => return Err(spawn_failed(format!("cannot read /etc/passwd: {error}"))),
+    };
+    // Startup already parsed this file and it is root-owned, so this fails only if it changed or
+    // could not be read since. The frame names only what failed; the log keeps the parse error.
+    let image = crate::image_permissions::image_config_env().map_err(|error| {
+        tracing::warn!(%error, "the image config could not be read for a command");
+        spawn_failed("the image config could not be read".to_string())
+    })?;
+    let mut environment = account_environment(identity.uid, &passwd, &image);
+    environment.extend(request.env.clone());
     let mut command =
-        sandbox_process::spawn_sandboxed(&request.command[0], &request.command[1..], &request.env)
+        sandbox_process::spawn_sandboxed(&request.command[0], &request.command[1..], &environment)
             .map_err(|_| Frame::Error {
                 code: "spawnFailed".to_string(),
                 message: "command could not be prepared".to_string(),
@@ -407,9 +429,149 @@ fn invalid(reason: &str) -> AlienError<ErrorData> {
     })
 }
 
+/// `HOME` and `USER` for a command run as `uid`: the image's own value where its config sets a
+/// usable (non-empty, NUL-free) one, else the account's passwd entry. `HOME` is `/` when the entry
+/// has no usable home or there is no entry, and there is no `USER` without a usable name.
+fn account_environment(
+    uid: u32,
+    passwd: &str,
+    image: &BTreeMap<String, String>,
+) -> BTreeMap<String, String> {
+    let account = alien_core::sandbox_identity::passwd_account(passwd, uid);
+    let usable = |value: &&str| alien_core::sandbox_identity::usable_account_value(value);
+    let mut environment = BTreeMap::from([(
+        "HOME".to_string(),
+        account
+            .map(|(_, home)| home)
+            .filter(usable)
+            .unwrap_or("/")
+            .to_string(),
+    )]);
+    if let Some(name) = account.map(|(name, _)| name).filter(usable) {
+        environment.insert("USER".to_string(), name.to_string());
+    }
+    for name in ["HOME", "USER"] {
+        if let Some(value) = image.get(name).map(String::as_str).filter(usable) {
+            environment.insert(name.to_string(), value.to_string());
+        }
+    }
+    environment
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const PASSWD: &str = "root:x:0:0:root:/root:/bin/sh\n\
+                          sandbox:x:60000:60000::/sandbox:/sbin/nologin\n\
+                          homeless:x:60001:60001:::/sbin/nologin\n";
+
+    fn account(uid: u32, passwd: &str, image: &[(&str, &str)]) -> BTreeMap<String, String> {
+        let image = image
+            .iter()
+            .map(|(name, value)| (name.to_string(), value.to_string()))
+            .collect();
+        account_environment(uid, passwd, &image)
+    }
+
+    fn vars(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+        pairs
+            .iter()
+            .map(|(name, value)| (name.to_string(), value.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn a_command_gets_its_accounts_home_and_name() {
+        assert_eq!(
+            account(60000, PASSWD, &[]),
+            vars(&[("HOME", "/sandbox"), ("USER", "sandbox")])
+        );
+    }
+
+    #[test]
+    fn the_images_own_home_and_user_win_over_the_account() {
+        assert_eq!(
+            account(
+                60000,
+                PASSWD,
+                &[("HOME", "/image-home"), ("PATH", "/image/bin")]
+            ),
+            vars(&[("HOME", "/image-home"), ("USER", "sandbox")]),
+            "only HOME and USER come from the image, and its PATH stays the agent's"
+        );
+        assert_eq!(
+            account(60000, PASSWD, &[("USER", "builder")]),
+            vars(&[("HOME", "/sandbox"), ("USER", "builder")])
+        );
+        assert_eq!(
+            account(60000, PASSWD, &[("HOME", "")]),
+            vars(&[("HOME", "/sandbox"), ("USER", "sandbox")]),
+            "an empty HOME in the image counts as unset"
+        );
+    }
+
+    #[test]
+    fn a_uid_with_no_entry_gets_root_as_home_and_no_user() {
+        assert_eq!(account(4242, PASSWD, &[]), vars(&[("HOME", "/")]));
+        assert_eq!(
+            account(60000, "", &[]),
+            vars(&[("HOME", "/")]),
+            "an image with no passwd file"
+        );
+    }
+
+    #[test]
+    fn an_entry_with_an_empty_home_gets_root_as_home() {
+        assert_eq!(
+            account(60001, PASSWD, &[]),
+            vars(&[("HOME", "/"), ("USER", "homeless")])
+        );
+    }
+
+    #[test]
+    fn a_value_with_a_nul_is_left_out() {
+        assert_eq!(
+            account(60000, PASSWD, &[("HOME", "/bad\0home")]),
+            vars(&[("HOME", "/sandbox"), ("USER", "sandbox")]),
+            "an image HOME with a NUL falls back to the account's"
+        );
+        assert_eq!(
+            account(60000, "sandbox:x:60000:60000::/bad\0home:/bin/sh\n", &[]),
+            vars(&[("HOME", "/"), ("USER", "sandbox")])
+        );
+    }
+
+    #[test]
+    fn an_unusable_image_user_or_account_name_is_left_out() {
+        assert_eq!(
+            account(60000, PASSWD, &[("USER", "")]),
+            vars(&[("HOME", "/sandbox"), ("USER", "sandbox")]),
+            "an empty USER in the image counts as unset"
+        );
+        assert_eq!(
+            account(60000, PASSWD, &[("USER", "a\0b")]),
+            vars(&[("HOME", "/sandbox"), ("USER", "sandbox")])
+        );
+        assert_eq!(
+            account(60002, ":x:60002:60002::/h:/bin/sh\n", &[]),
+            vars(&[("HOME", "/h")]),
+            "an entry with no name gives no USER"
+        );
+        assert_eq!(
+            account(60000, "a\0b:x:60000:60000::/h:/bin/sh\n", &[]),
+            vars(&[("HOME", "/h")])
+        );
+        assert_eq!(
+            account(
+                60000,
+                "first:x:60000:60000::/first:/bin/sh\nsecond:x:60000:60000::/second:/bin/sh\n",
+                &[]
+            ),
+            vars(&[("HOME", "/first"), ("USER", "first")]),
+            "the first entry for a uid wins"
+        );
+    }
 
     fn request(command: &[&str], timeout_ms: u64) -> ExecRequest {
         ExecRequest {

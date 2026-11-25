@@ -142,7 +142,7 @@ fn from_platform(
 }
 
 /// The image's own environment from its saved OCI config; empty without one.
-fn image_config_env() -> Result<std::collections::BTreeMap<String, String>> {
+pub(crate) fn image_config_env() -> Result<std::collections::BTreeMap<String, String>> {
     match std::fs::read(alien_core::sandbox_image::IMAGE_COMMAND_PATH) {
         Ok(bytes) => {
             serde_json::from_slice::<alien_core::sandbox_image::SandboxImageCommand>(&bytes)

@@ -464,8 +464,15 @@ Under egress `none`, Azure sandboxes can still resolve DNS names through the pla
 ## Process lifecycle
 
 Boot commands receive HOME from their passwd entry (or `/`) and the container
-HOSTNAME unless the image or create-time environment overrides them. Each boot
-command owns a process group. On SIGTERM or SIGINT the agent stops serving,
+HOSTNAME unless the image or create-time environment overrides them. Exec, job
+and interactive commands receive HOME and USER: the image's own value when its
+saved config sets a usable (non-empty, NUL-free) one, otherwise the exec uid's
+passwd entry (HOME `/` when the entry has no home or there is none, and no USER
+without a usable name). A value the caller passes with the command wins.
+On Azure, commands also inherit the agent's own environment (the create-time
+environment and whatever the runtime sets), so a HOME or USER there wins over
+the image and passwd values, though not over one the caller passes.
+Each boot command owns a process group. On SIGTERM or SIGINT the agent stops serving,
 sends SIGTERM to that group, allows two seconds, then sends SIGKILL and collects
 the leader. If the leader exits earlier, health reports its exit immediately,
 but the agent retains that one exited child until shutdown to reserve the process
