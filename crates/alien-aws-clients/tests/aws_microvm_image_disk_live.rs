@@ -5,7 +5,7 @@
 //! builds' reasons, and deletes the image. `#[ignore]`: it creates real, billable resources.
 //!
 //! The bucket, build role and images are made beforehand; the test creates and deletes only the
-//! MicroVM images and their bundle objects, all named `alien3273-probe-*`.
+//! MicroVM images and their bundle objects, all named `microvm-disk-probe-*`.
 //!
 //! ```text
 //! PROBE_BUCKET=... PROBE_ROLE_ARN=... PROBE_MEMORY_MIB=1024 PROBE_IMAGES=a,b \
@@ -66,7 +66,7 @@ async fn probe(
     let account = std::env::var("AWS_TARGET_ACCOUNT_ID").unwrap();
     let region = std::env::var("AWS_TARGET_REGION").unwrap();
     let id = uuid::Uuid::new_v4().simple().to_string()[..8].to_string();
-    let name = format!("alien3273-probe-{index}-{id}");
+    let name = format!("microvm-disk-probe-{index}-{id}");
     let key = format!("{name}/bundle.zip");
     let s3 = S3Client::new(Client::new(), provider());
     let lambda = LambdaMicrovmsClient::new(Client::new(), provider());
