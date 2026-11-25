@@ -175,7 +175,11 @@ Open http://localhost:3000, start a thread and send a message.
 
 The model id is `claude-sonnet-4-6` by default; set `MODEL` when you release to use another model your account can invoke on Bedrock.
 
-To remove everything: destroy the deployment, then `terraform destroy` in `customer-network/terraform/`.
+To remove everything, in this order:
+
+1. Destroy the deployment: `alien destroy --name <deployment name> --platform aws`.
+2. Delete the CloudFormation stack and the scanner key's SSM parameter (`<stack>-deployer-secrets-scanner-api-key`).
+3. `terraform destroy` in `customer-network/terraform/`.
 
 ## Demo walkthrough
 
@@ -187,7 +191,6 @@ Start a thread as `alice`. The **Run in sandbox** box runs a shell command in th
 4. **Switch the user mid-thread.** Pick `bob` and ask: *cancel order 1004*. The thread shows that alice's leftover processes were ended, and before the turn starts the sandbox is bound to `bob`; `bob` may read orders but not change them, so the connector answers 403 and the agent says so. Reads still work.
 5. **A key the sandbox never holds.** Ask the agent: *list the scanner findings*. It runs `scanner findings`, the connector adds the customer's key, and three findings come back. Run `env | sort` in the sandbox again: there is no scanner key, and `curl http://<scanner private IP>:8081/findings` is refused.
 6. **Idle threads pause and resume.** Ask the agent to *keep an orders watch running in the background*. It starts `orders watch` detached and reports its pid. Leave the thread idle until it shows *paused*, then send another message as the same user: it resumes, `pgrep -f "orders watch"` shows the same pid, and the agent remembers the earlier turns. Between turns the watcher has no credentials, so its calls get a 401 until the next turn binds the sandbox again. Local sandboxes do not pause, so this one shows on AWS.
-7. **Another account.** Apply `customer-network/terraform/` and deploy the same release into a second AWS account. Everything above works the same.
 
 ### What you should see
 

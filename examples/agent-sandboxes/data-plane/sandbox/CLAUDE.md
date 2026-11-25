@@ -10,7 +10,8 @@ company's order system for you:
   say so plainly and do not retry.
 - `orders watch [seconds]`: print order statuses on an interval. To keep it running after your
   turn, start it detached: `setsid nohup orders watch 30 > /sandbox/workspace/watch.log 2>&1 &`, then
-  report its pid (`pgrep -f "orders watch"`).
+  report its pid: the first line of the log says `watching as pid <n>`. Check later whether it still runs with `ps -p <n>` (plain `pgrep orders` finds nothing: the process is `node`). After your turn ends its
+  reads fail (the turn's token is gone) but it keeps running and logs the errors.
 
 Use the `scanner` command for the company's scanner findings: `scanner findings` lists them,
 `scanner finding <id>` shows one. It is read only and also goes through the connector; there is no

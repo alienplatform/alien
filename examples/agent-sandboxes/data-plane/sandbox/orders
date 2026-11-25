@@ -23,31 +23,39 @@ async function call(method, path, body) {
     body: body ? JSON.stringify(body) : undefined,
   })
   const text = await response.text()
-  if (!response.ok) {
-    console.error(`${response.status}: ${text}`)
+  if (!response.ok) throw new Error(`${response.status}: ${text}`)
+  return JSON.parse(text)
+}
+
+// One-shot commands print a failure and exit 1; watch keeps going.
+async function once(method, path, body) {
+  try {
+    return await call(method, path, body)
+  } catch (error) {
+    console.error(error.message)
     process.exit(1)
   }
-  return JSON.parse(text)
 }
 
 const [command, id, flag, value] = process.argv.slice(2)
 const usage = "usage: orders list | get <id> | update <id> --status <status> | watch [seconds]"
 
 if (command === "list") {
-  console.log(JSON.stringify(await call("GET", "/orders"), null, 2))
+  console.log(JSON.stringify(await once("GET", "/orders"), null, 2))
 } else if (command === "get" && id) {
-  console.log(JSON.stringify(await call("GET", `/orders/${encodeURIComponent(id)}`), null, 2))
+  console.log(JSON.stringify(await once("GET", `/orders/${encodeURIComponent(id)}`), null, 2))
 } else if (command === "update" && id && flag === "--status" && value) {
   console.error("waiting for approval...")
-  console.log(JSON.stringify(await call("PATCH", `/orders/${encodeURIComponent(id)}`, { status: value }), null, 2))
+  console.log(JSON.stringify(await once("PATCH", `/orders/${encodeURIComponent(id)}`, { status: value }), null, 2))
 } else if (command === "watch") {
   const every = Number(id ?? 30) * 1000
+  console.log(`watching as pid ${process.pid}`)
   for (;;) {
     try {
       const { orders } = await call("GET", "/orders")
       console.log(new Date().toISOString(), orders.map(o => `${o.id}:${o.status}`).join(" "))
     } catch (error) {
-      console.log(new Date().toISOString(), `error: ${error}`)
+      console.log(new Date().toISOString(), `error: ${error.message}`)
     }
     await new Promise(resolve => setTimeout(resolve, every))
   }

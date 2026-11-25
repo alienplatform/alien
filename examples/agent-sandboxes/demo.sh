@@ -94,6 +94,6 @@ say_to "$THREAD" alice 'Start `orders watch` in the background and tell me its p
 sleep 40
 echo "waiting $IDLE_WAIT s for the thread to pause"; sleep "$IDLE_WAIT"
 curl -fsS "$CP/api/threads" | python3 -c 'import json,sys; [print(t["id"], t["state"]) for t in json.load(sys.stdin)["threads"]]'
-say_to "$THREAD" alice 'Is the orders watch still running? Check with pgrep and give the pid.'
+say_to "$THREAD" alice 'Is the orders watch still running? Check its pid from the log.'
 sleep 40
 last_result "$THREAD"
