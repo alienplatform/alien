@@ -1794,7 +1794,11 @@ impl AwsSandboxController {
             };
             match observed {
                 Ok(LaunchableSandboxVersions::Known(versions)) => {
-                    proved_clusters.insert(id.clone());
+                    // Only a saved compute cluster speaks for the workloads on it; any
+                    // other resource's answer covers just itself.
+                    if state.resource_type == alien_core::ComputeCluster::RESOURCE_TYPE.to_string() {
+                        proved_clusters.insert(id.clone());
+                    }
                     found.named.extend(versions)
                 }
                 // A resource that never linked this sandbox and does not observe bindings
@@ -1810,11 +1814,17 @@ impl AwsSandboxController {
                             state.status == ResourceStatus::Running && state.config == entry.config
                         });
                     if !settled {
-                        // Only a container names a cluster that could observe it.
+                        // Only a container or daemon names a cluster that could observe it.
                         let cluster = state
                             .config
                             .downcast_ref::<alien_core::Container>()
-                            .and_then(|container| container.cluster.clone());
+                            .and_then(|container| container.cluster.clone())
+                            .or_else(|| {
+                                state
+                                    .config
+                                    .downcast_ref::<alien_core::Daemon>()
+                                    .and_then(|daemon| daemon.cluster.clone())
+                            });
                         legacy.push((id.clone(), cluster));
                     }
                 }
@@ -7847,6 +7857,8 @@ mod tests {
             client: MockLambdaMicrovmsApi,
             container_cluster: Option<&str>,
             cluster_answer: Option<LaunchableSandboxVersions>,
+            cluster_type: &str,
+            as_daemon: bool,
         ) -> SingleControllerExecutor {
             let mut executor = SingleControllerExecutor::builder()
                 .resource(sandbox_with_bundle(
@@ -7874,10 +7886,29 @@ mod tests {
                 .link(&sandbox())
                 .build();
             container.cluster = container_cluster.map(str::to_string);
+            let (workload_type, workload) = if as_daemon {
+                let mut daemon = alien_core::Daemon::new("api".to_string())
+                    .code(alien_core::DaemonCode::Image {
+                        image: "123456789012.dkr.ecr.us-east-1.amazonaws.com/api:latest"
+                            .to_string(),
+                    })
+                    .link(&sandbox())
+                    .build();
+                daemon.cluster = container_cluster.map(str::to_string);
+                (
+                    alien_core::Daemon::RESOURCE_TYPE.to_string(),
+                    alien_core::Resource::new(daemon),
+                )
+            } else {
+                (
+                    alien_core::Container::RESOURCE_TYPE.to_string(),
+                    alien_core::Resource::new(container),
+                )
+            };
             let mut saved = alien_core::StackResourceState::builder()
-                .resource_type(alien_core::Container::RESOURCE_TYPE.to_string())
+                .resource_type(workload_type)
                 .status(ResourceStatus::Running)
-                .config(alien_core::Resource::new(container))
+                .config(workload)
                 .lifecycle(ResourceLifecycle::Live)
                 .build();
             saved
@@ -7891,7 +7922,7 @@ mod tests {
                 .permissions("old".to_string())
                 .build();
             let mut saved = alien_core::StackResourceState::builder()
-                .resource_type(alien_core::Worker::RESOURCE_TYPE.to_string())
+                .resource_type(cluster_type.to_string())
                 .status(ResourceStatus::Running)
                 .config(alien_core::Resource::new(cluster))
                 .lifecycle(ResourceLifecycle::Live)
@@ -8149,18 +8180,22 @@ mod tests {
     #[tokio::test]
     async fn a_container_is_covered_only_by_its_own_proven_cluster() {
         use blocked_rollout::*;
-        for (container_cluster, answer, reclaims) in [
-            (Some("compute"), known(&["30.0"]), true),
-            (Some("other"), known(&["30.0"]), false),
-            (None, known(&["30.0"]), false),
-            (
-                Some("compute"),
-                Some(LaunchableSandboxVersions::Unproven {
-                    reason: "a machine is silent".to_string(),
-                }),
-                false,
-            ),
-            (Some("compute"), None, false),
+        let cluster = alien_core::ComputeCluster::RESOURCE_TYPE.to_string();
+        let silent = || {
+            Some(LaunchableSandboxVersions::Unproven {
+                reason: "a machine is silent".to_string(),
+            })
+        };
+        for (container_cluster, answer, cluster_type, as_daemon, reclaims) in [
+            (Some("compute"), known(&["30.0"]), cluster.as_str(), false, true),
+            (Some("compute"), known(&["30.0"]), cluster.as_str(), true, true),
+            (Some("other"), known(&["30.0"]), cluster.as_str(), false, false),
+            (Some("other"), known(&["30.0"]), cluster.as_str(), true, false),
+            (None, known(&["30.0"]), cluster.as_str(), false, false),
+            (Some("compute"), silent(), cluster.as_str(), false, false),
+            (Some("compute"), None, cluster.as_str(), false, false),
+            // A generic resource's answer is not a cluster witness.
+            (Some("compute"), known(&["30.0"]), "worker", false, false),
         ] {
             let image = FakeImage::at_cap();
             let mut executor = executor_with_container_on_cluster(
@@ -8168,6 +8203,8 @@ mod tests {
                 image.client(),
                 container_cluster,
                 answer,
+                cluster_type,
+                as_daemon,
             )
             .await;
             for _ in 0..4 {
