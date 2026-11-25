@@ -7544,6 +7544,16 @@ mod sandbox_build_tests {
         preview_ports: Vec<u16>,
     }
 
+    /// What an Operator older than the image size field reads: the pull-time compatibility
+    /// strip removes `imageSizeBytes` for it, so it never sees the field.
+    fn previous_reader_view(
+        sandbox: &alien_core::Sandbox,
+    ) -> std::result::Result<PreviousSandboxReader, serde_json::Error> {
+        let mut release = serde_json::to_value(sandbox).unwrap();
+        release.as_object_mut().unwrap().remove("imageSizeBytes");
+        serde_json::from_value(release)
+    }
+
     fn built_archive_exists(directory: &str) -> bool {
         std::fs::read_dir(directory).is_ok_and(|entries| {
             entries
@@ -7654,8 +7664,7 @@ mod sandbox_build_tests {
                     }
                 }
                 assert_eq!(sandbox.image_user, requires_new_reader.then_some(uid));
-                let release = serde_json::to_value(sandbox).unwrap();
-                let old = serde_json::from_value::<PreviousSandboxReader>(release);
+                let old = previous_reader_view(sandbox);
                 if requires_new_reader {
                     assert!(old.unwrap_err().to_string().contains("imageUser"));
                 } else {
@@ -7901,9 +7910,7 @@ mod sandbox_build_tests {
                     environment.contains_key("ALIEN_SANDBOX_EGRESS_RUN_HOOK"),
                     !legacy
                 );
-                let old = serde_json::from_value::<PreviousSandboxReader>(
-                    serde_json::to_value(sandbox).unwrap(),
-                );
+                let old = previous_reader_view(sandbox);
                 if legacy {
                     old.expect("legacy no-USER mode must remain readable");
                 } else {
