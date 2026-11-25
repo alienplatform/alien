@@ -831,6 +831,21 @@ pub trait ResourceController: Send + Sync + Debug {
         Ok(())
     }
 
+    /// As the workload `dependent_id`, a dependent of the sandbox `sandbox_id`: the image
+    /// versions it can still start a session on, read from what the platform actually runs and
+    /// never from the release being applied. See [`LaunchableSandboxVersions`] for the answers.
+    ///
+    /// Read-only: it must not change the workload. An error means the read failed; the sandbox
+    /// treats it as an answer it cannot rely on, never as an empty one.
+    async fn launchable_sandbox_versions(
+        &self,
+        _context: &ResourceControllerContext<'_>,
+        _dependent_id: &str,
+        _sandbox_id: &str,
+    ) -> Result<LaunchableSandboxVersions> {
+        Ok(LaunchableSandboxVersions::NotObserved)
+    }
+
     /// Whether a Running resource must continue its controller state machine
     /// during convergence phases. Most Ready resources are periodic health
     /// checks and should only run in the dedicated Running pass.
@@ -917,6 +932,23 @@ pub trait ResourceController: Send + Sync + Debug {
         // Default implementation returns None for resources that don't expose binding parameters
         Ok(None)
     }
+}
+
+/// What a dependent reports about the sandbox image versions it can still start a session on.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LaunchableSandboxVersions {
+    /// A complete answer: every version any binding the workload holds names. A binding it
+    /// holds counts if a running instance carries it, an instance being replaced still carries
+    /// it, or an instance launched next would. Empty when the workload holds no binding.
+    Known(Vec<String>),
+    /// The controller looked and cannot say, for example because an instance may still run
+    /// that the platform no longer reports. The sandbox keeps every replaced version until a
+    /// later answer is complete; it does not fall back to comparing configs.
+    Unproven { reason: String },
+    /// The controller does not observe bindings. The sandbox applies its older check: the
+    /// dependent runs the config being applied, which holds the current binding.
+    NotObserved,
 }
 
 impl Clone for Box<dyn ResourceController> {

@@ -18,7 +18,10 @@ use std::time::Duration;
 
 use tracing::{debug, info, warn};
 
-use crate::core::{ResourceControllerContext, ResourcePermissionsHelper};
+use crate::core::{
+    state_utils::StackResourceStateExt, LaunchableSandboxVersions, ResourceControllerContext,
+    ResourcePermissionsHelper,
+};
 use crate::error::{ErrorData, Result};
 use alien_aws_clients::lambda_microvms::{is_refused_for_running_microvms, MicrovmImageBuild};
 use alien_aws_clients::sandbox_image_build::image_build_inputs;
@@ -61,6 +64,13 @@ const RETIRED_VERSION_DELETE_MARGIN_MINUTES: i64 = 30;
 /// Versions AWS keeps per image. The limit is not read from the service; it only words the
 /// message when a roll is refused for it.
 const IMAGE_VERSION_QUOTA: usize = 50;
+/// How often a roll waiting for a version slot runs the reclaim pass again. Each pass lists the
+/// image, retires what no binding names and deletes what the session fence has released.
+const VERSION_SLOT_POLL_INTERVAL: Duration = Duration::from_secs(300);
+/// How long a roll waits for draining versions before it fails: the session fence, its margin
+/// and an hour for the passes to land.
+const VERSION_SLOT_MAX_WAIT_MINUTES: i64 =
+    SESSION_LIFESPAN_SECONDS / 60 + RETIRED_VERSION_DELETE_MARGIN_MINUTES + 60;
 /// Most retired versions marked inactive in one pass.
 const MAX_RETIREMENTS_PER_PASS: usize = 10;
 
@@ -72,6 +82,24 @@ const RETIRE_GRACE_MINUTES: i64 = 60;
 /// How long to leave retiring alone after AWS refused it for a missing grant, so a role that
 /// predates the grant is not asked on every pass.
 const RETIRE_DENIED_BACKOFF_HOURS: i64 = 6;
+
+/// Why the inventory is reconciled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Slot {
+    /// A build is about to be asked for and needs a free version slot.
+    Needed,
+    /// Steady-state maintenance: every version past its fence is deleted.
+    Maintenance,
+}
+
+/// What the sandbox's dependents can still launch.
+#[derive(Debug, Default)]
+struct DependentVersions {
+    /// Versions an observed binding names.
+    named: std::collections::BTreeSet<String>,
+    /// Dependents whose launchable versions could not be proven.
+    unproven: Vec<String>,
+}
 
 /// A version a roll replaced, and when it stopped serving.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -160,6 +188,17 @@ pub struct AwsSandboxController {
     /// out a backoff after it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) retire_denied_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Dependents whose launchable sandbox versions could not be proven by this step's retiring
+    /// pass, so replaced versions were kept for them. Reported with a refused roll; not saved.
+    #[serde(skip)]
+    pub(crate) retire_blocked_by: Vec<String>,
+    /// Why a roll is waiting for a version slot, shown as the step's progress; not saved.
+    #[serde(skip)]
+    pub(crate) version_slot_wait: Option<String>,
+    /// When the roll first found the image full with versions draining. Bounds the wait for
+    /// them. The `wait_for_*_started_at` name makes a retry start a fresh window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) wait_for_version_slot_started_at: Option<chrono::DateTime<chrono::Utc>>,
     /// Accepted deletion, retained until the provider confirms absence.
     #[serde(default)]
     pub(crate) deleting_version: Option<String>,
@@ -222,6 +261,13 @@ impl super::egress::RecordsEgressKey for AwsSandboxController {
 
 #[controller]
 impl AwsSandboxController {
+    fn get_progress(&self) -> Option<&str> {
+        match self.state {
+            AwsSandboxState::UpdatingImage => self.version_slot_wait.as_deref(),
+            _ => None,
+        }
+    }
+
     fn has_runtime_setup_inputs(&self) -> bool {
         // Built-image imports omit the role. Runtime registrations and resumed
         // runtime builds retain it, including Frozen-to-Live handoffs.
@@ -382,7 +428,7 @@ impl AwsSandboxController {
                     // inventory before the create-recovery request, too.
                     self.image_identifier = Some(identifier.clone());
                     if self
-                        .reconcile_image_inventory(ctx, &client, &config.id)
+                        .reconcile_image_inventory(ctx, &client, &config.id, Slot::Needed)
                         .await?
                     {
                         return Ok(HandlerAction::Continue {
@@ -713,7 +759,7 @@ impl AwsSandboxController {
             // IAM from a Live sibling, prevents runtime inventory mutations.
             if self.owns_image_deletion(ctx, &config.id) {
                 if self
-                    .reconcile_image_inventory(ctx, &client, &config.id)
+                    .reconcile_image_inventory(ctx, &client, &config.id, Slot::Maintenance)
                     .await?
                 {
                     return Ok(HandlerAction::Continue {
@@ -949,7 +995,7 @@ impl AwsSandboxController {
             // Saved UpdatingImage retries enter here directly. Accepted builds
             // are recovered above before any failed inventory can be removed.
             if self
-                .reconcile_image_inventory(ctx, &client, &config.id)
+                .reconcile_image_inventory(ctx, &client, &config.id, Slot::Needed)
                 .await?
             {
                 return Ok(HandlerAction::Continue {
@@ -957,6 +1003,37 @@ impl AwsSandboxController {
                     suggested_delay: Some(BUILD_POLL_INTERVAL),
                 });
             }
+            // Reclaim has run and no deletion is under way. A full image refuses the build, so
+            // it is not asked: while versions drain the roll waits on this state and runs the
+            // reclaim again, and only a cap with nothing draining is an error.
+            if inventory.len() >= IMAGE_VERSION_QUOTA {
+                let message =
+                    self.version_cap_message(&image_identifier, &inventory.len().to_string());
+                let draining = self
+                    .retired_versions
+                    .iter()
+                    .any(|entry| entry.inactive_at.is_some());
+                let now = chrono::Utc::now();
+                let since = *self.wait_for_version_slot_started_at.get_or_insert(now);
+                if !draining
+                    || now - since > chrono::Duration::minutes(VERSION_SLOT_MAX_WAIT_MINUTES)
+                {
+                    self.version_slot_wait = None;
+                    self.wait_for_version_slot_started_at = None;
+                    return Err(AlienError::new(ErrorData::CloudPlatformError {
+                        message,
+                        resource_id: Some(config.id.clone()),
+                    }));
+                }
+                info!(sandbox_id = %config.id, image = %image_identifier, "{message}");
+                self.version_slot_wait = Some(message);
+                return Ok(HandlerAction::Stay {
+                    max_times: None,
+                    suggested_delay: Some(VERSION_SLOT_POLL_INTERVAL),
+                });
+            }
+            self.version_slot_wait = None;
+            self.wait_for_version_slot_started_at = None;
             self.roll_image(ctx, client.as_ref(), &config.id, &image_identifier, request)
                 .await
                 .context(ErrorData::CloudPlatformError {
@@ -1431,6 +1508,7 @@ impl AwsSandboxController {
         ctx: &ResourceControllerContext<'_>,
         client: &std::sync::Arc<dyn alien_aws_clients::lambda_microvms::LambdaMicrovmsApi>,
         resource_id: &str,
+        slot: Slot,
     ) -> Result<bool> {
         let Some(identifier) = self.image_identifier.clone() else {
             return Ok(false);
@@ -1462,6 +1540,7 @@ impl AwsSandboxController {
                 message: format!("Failed to inventory MicroVM image '{identifier}'"),
                 resource_id: Some(resource_id.to_string()),
             })?;
+        let held = inventory.len();
         // AWS refuses to delete the last version. Retry a failed initial build
         // first, then reclaim it once the replacement exists.
         if inventory.len() == 1 {
@@ -1538,12 +1617,31 @@ impl AwsSandboxController {
         let retire_backoff = self.retire_denied_at.is_some_and(|at| {
             chrono::Utc::now() < at + chrono::Duration::hours(RETIRE_DENIED_BACKOFF_HOURS)
         });
-        if !retire_backoff && self.dependents_on_current_binding(ctx, resource_id) {
+        // Observing dependents costs provider reads, so it waits for a version it could retire.
+        let now_for_grace = chrono::Utc::now();
+        let keep = self.retired_versions.len().saturating_sub(1);
+        let has_candidate = self.retired_versions.iter().take(keep).any(|entry| {
+            entry.inactive_at.is_none()
+                && now_for_grace
+                    >= entry.retired_at + chrono::Duration::minutes(RETIRE_GRACE_MINUTES)
+        });
+        self.retire_blocked_by.clear();
+        let dependents = if retire_backoff || !has_candidate {
+            None
+        } else {
+            Some(self.dependent_versions(ctx, resource_id).await)
+        };
+        if let Some(dependents) = &dependents {
+            self.retire_blocked_by = dependents.unproven.clone();
+        }
+        if let Some(dependents) = dependents.filter(|dependents| dependents.unproven.is_empty()) {
             let mut retired = 0;
-            let now_for_grace = chrono::Utc::now();
-            let keep = self.retired_versions.len().saturating_sub(1);
             for entry in self.retired_versions.iter_mut().take(keep) {
                 if entry.inactive_at.is_some() {
+                    continue;
+                }
+                // A binding a dependent still holds names it: sessions can start on it.
+                if dependents.named.contains(&entry.version) {
                     continue;
                 }
                 // Too recently replaced for every dependent to have picked up the new binding.
@@ -1612,7 +1710,9 @@ impl AwsSandboxController {
             .filter(|entry| entry.deletable_at().is_some_and(|at| now > at))
             .min_by_key(|entry| entry.inactive_at)
             .map(|entry| entry.version.clone());
-        if let Some(version) = oldest_deletable {
+        // A roll needs one free slot, not an empty image: the rest is the maintenance pass's.
+        let slot_free = slot == Slot::Needed && held < IMAGE_VERSION_QUOTA;
+        if let Some(version) = oldest_deletable.filter(|_| !slot_free) {
             match client
                 .delete_microvm_image_version(identifier, &version)
                 .await
@@ -1635,28 +1735,90 @@ impl AwsSandboxController {
         Ok(false)
     }
 
-    /// Whether every dependent that updates at runtime has rolled to its current config, so none
-    /// can still hold a binding that names a replaced version. A dependent that is not running,
-    /// or runs an older config, may still hold one.
-    fn dependents_on_current_binding(
+    /// The image versions the sandbox's dependents can still start a session on, from what each
+    /// one runs and not from the release being applied: a dependent waiting on this sandbox's
+    /// new version still holds the old one.
+    ///
+    /// Every resource with saved state that links this sandbox counts, including one whose link
+    /// the pending release removed. A dependent that reports its launchable versions
+    /// ([`ResourceController::launchable_sandbox_versions`]) names them, or says it cannot
+    /// tell, which keeps every replaced version. A dependent that does not observe bindings is
+    /// proven only by the older check: running with the config being applied, which holds the
+    /// current binding. A dependent whose state cannot be read is unproven.
+    async fn dependent_versions(
         &self,
         ctx: &ResourceControllerContext<'_>,
         resource_id: &str,
-    ) -> bool {
-        ctx.desired_stack.resources().all(|(id, entry)| {
-            if id == resource_id
-                || entry.lifecycle != alien_core::ResourceLifecycle::Live
-                || !entry
-                    .combined_dependencies()
-                    .iter()
-                    .any(|dependency| dependency.id == resource_id)
-            {
-                return true;
+    ) -> DependentVersions {
+        let links_sandbox = |refs: &[alien_core::ResourceRef]| {
+            refs.iter().any(|dependency| dependency.id() == resource_id)
+        };
+        let mut found = DependentVersions::default();
+        for (id, state) in &ctx.state.resources {
+            let desired = ctx.desired_stack.resources.get(id);
+            let linked = links_sandbox(&state.dependencies)
+                || links_sandbox(&state.config.get_dependencies())
+                || state
+                    .previous_config
+                    .as_ref()
+                    .is_some_and(|previous| links_sandbox(&previous.get_dependencies()))
+                || desired.is_some_and(|entry| links_sandbox(&entry.combined_dependencies()));
+            if id == resource_id || !linked {
+                continue;
             }
-            ctx.state.resources.get(id).map_or(true, |state| {
-                state.status == ResourceStatus::Running && state.config == entry.config
-            })
-        })
+            // Nothing was ever applied for it: no workload holds a binding.
+            if matches!(
+                state.status,
+                ResourceStatus::Pending | ResourceStatus::Deleted
+            ) {
+                continue;
+            }
+            let observed = match state.get_internal_controller() {
+                Ok(Some(controller)) => {
+                    controller
+                        .launchable_sandbox_versions(ctx, id, resource_id)
+                        .await
+                }
+                // A workload that exists but whose controller state is gone cannot be asked.
+                Ok(None) => Ok(LaunchableSandboxVersions::Unproven {
+                    reason: "its controller state is not available".to_string(),
+                }),
+                Err(error) => Err(error),
+            };
+            match observed {
+                Ok(LaunchableSandboxVersions::Known(versions)) => found.named.extend(versions),
+                Ok(LaunchableSandboxVersions::NotObserved) => {
+                    // The older check. A setup-owned consumer holds the binding setup gave it,
+                    // which a runtime release does not change.
+                    let settled = state.lifecycle == Some(alien_core::ResourceLifecycle::Frozen)
+                        || desired.is_some_and(|entry| {
+                            state.status == ResourceStatus::Running && state.config == entry.config
+                        });
+                    if !settled {
+                        found.unproven.push(id.clone());
+                    }
+                }
+                Ok(LaunchableSandboxVersions::Unproven { reason }) => {
+                    warn!(
+                        sandbox_id = %resource_id,
+                        dependent = %id,
+                        reason = %reason,
+                        "A dependent's launchable sandbox versions are not proven"
+                    );
+                    found.unproven.push(id.clone());
+                }
+                Err(error) => {
+                    warn!(
+                        sandbox_id = %resource_id,
+                        dependent = %id,
+                        error = %error,
+                        "Could not read which sandbox versions a dependent can launch"
+                    );
+                    found.unproven.push(id.clone());
+                }
+            }
+        }
+        found
     }
 
     /// Rolls a new version, and says why when AWS refuses it for the version cap: how many
@@ -1681,6 +1843,15 @@ impl AwsSandboxController {
             .await
             .map(|versions| versions.len().to_string())
             .unwrap_or_else(|_| "all".to_string());
+        Err(error).context(ErrorData::CloudPlatformError {
+            message: self.version_cap_message(image, &held),
+            resource_id: Some(sandbox_id.to_string()),
+        })
+    }
+
+    /// Why a roll cannot have a version slot: how many versions the image holds and what must
+    /// happen before one frees.
+    fn version_cap_message(&self, image: &str, held: &str) -> String {
         let next = self
             .retired_versions
             .iter()
@@ -1688,17 +1859,17 @@ impl AwsSandboxController {
             .min();
         let when = match next {
             Some(at) => format!("the oldest retired version becomes deletable at {at}"),
-            None => "no retired version has been retired yet, so none can be deleted soon; \
-                     versions replaced by dependents still binding them are kept until those \
-                     dependents roll"
+            None if !self.retire_blocked_by.is_empty() => format!(
+                "no version has been retired yet: {} could not be proven to have stopped using \
+                 the replaced versions, so they are kept until it is",
+                self.retire_blocked_by.join(", ")
+            ),
+            None => "no replaced version is free to retire yet; versions a dependent still \
+                     binds are kept until it rolls, and the newest replaced one stays for a \
+                     grace period"
                 .to_string(),
         };
-        Err(error).context(ErrorData::CloudPlatformError {
-            message: format!(
-                "MicroVM image '{image}' holds {held} of {IMAGE_VERSION_QUOTA} versions; {when}"
-            ),
-            resource_id: Some(sandbox_id.to_string()),
-        })
+        format!("MicroVM image '{image}' holds {held} of {IMAGE_VERSION_QUOTA} versions; {when}")
     }
 
     /// Whether this controller built the image and may therefore rebuild it: a Live sandbox, or a
@@ -7178,12 +7349,16 @@ mod tests {
             .build()
             .await
             .expect("executor should build");
-        let saved = alien_core::StackResourceState::builder()
+        let mut saved = alien_core::StackResourceState::builder()
             .resource_type(alien_core::Build::RESOURCE_TYPE.to_string())
             .status(ResourceStatus::Running)
             .config(alien_core::Resource::new(consumer()))
             .lifecycle(alien_core::ResourceLifecycle::Live)
             .build();
+        // A controller that does not observe bindings: the older config check applies.
+        saved
+            .set_internal_controller(Some(Box::new(crate::TestWorkerController::default())))
+            .unwrap();
         executor.insert_saved_resource("consumer", saved);
         executor.step().await.expect("ready tick");
         let controller = executor.internal_state::<AwsSandboxController>().unwrap();
@@ -7420,7 +7595,6 @@ mod tests {
     /// inactive, the serving version the newest.
     mod blocked_rollout {
         use super::*;
-        use alien_aws_clients::lambda::MockLambdaApi;
         use alien_aws_clients::lambda_microvms::MicrovmImageVersionStatus;
         use alien_core::{ResourceLifecycle, Worker, WorkerCode};
 
@@ -7562,57 +7736,28 @@ mod tests {
                 .build()
         }
 
-        /// The binding the sandbox emitted when it served `version`.
-        pub(super) fn binding_naming(version: &str) -> String {
-            let mut controller = ready_controller();
-            controller.active_version = Some(version.to_string());
-            controller
-                .get_binding_params()
-                .unwrap()
-                .unwrap()
-                .to_string()
-        }
-
-        pub(super) fn provider_with_consumer_env(
-            client: MockLambdaMicrovmsApi,
-            environment: std::collections::HashMap<String, String>,
-        ) -> Arc<MockPlatformServiceProvider> {
-            let microvms = Arc::new(client);
-            let mut lambda = MockLambdaApi::new();
-            lambda
-                .expect_get_function_environment()
-                .returning(move |_| Ok(environment.clone()));
-            let lambda = Arc::new(lambda);
-            let mut provider = MockPlatformServiceProvider::new();
-            provider
-                .expect_get_aws_microvms_client()
-                .returning(move |_| Ok(microvms.clone()));
-            provider
-                .expect_get_aws_lambda_client()
-                .returning(move |_| Ok(lambda.clone()));
-            Arc::new(provider)
-        }
-
         pub(super) async fn executor_with_consumer(
             controller: AwsSandboxController,
-            provider: Arc<MockPlatformServiceProvider>,
+            client: MockLambdaMicrovmsApi,
+            observed: Option<LaunchableSandboxVersions>,
+            desired_still_links: bool,
         ) -> SingleControllerExecutor {
-            let worker_state = crate::AwsWorkerController {
-                worker_name: Some("test-api".to_string()),
+            let worker_state = crate::TestWorkerController {
+                launchable_sandbox_versions: observed,
                 ..Default::default()
             };
-            let mut executor = SingleControllerExecutor::builder()
+            let mut builder = SingleControllerExecutor::builder()
                 .resource(sandbox_with_bundle(
                     "s3://alien-bundles-test/sandbox/next.zip",
                 ))
                 .controller(controller)
                 .platform(Platform::Aws)
-                .service_provider(provider)
+                .service_provider(provider(client));
+            if desired_still_links {
                 // The pending release changes the API, which waits for the sandbox's new version.
-                .with_stack_resource(consumer("new"), ResourceLifecycle::Live)
-                .build()
-                .await
-                .expect("executor should build");
+                builder = builder.with_stack_resource(consumer("new"), ResourceLifecycle::Live);
+            }
+            let mut executor = builder.build().await.expect("executor should build");
             let mut saved = alien_core::StackResourceState::builder()
                 .resource_type(alien_core::Worker::RESOURCE_TYPE.to_string())
                 .status(ResourceStatus::Running)
@@ -7625,6 +7770,12 @@ mod tests {
             executor.insert_saved_resource("api", saved);
             executor
         }
+
+        pub(super) fn known(versions: &[&str]) -> Option<LaunchableSandboxVersions> {
+            Some(LaunchableSandboxVersions::Known(
+                versions.iter().map(|v| v.to_string()).collect(),
+            ))
+        }
     }
 
     /// A Live sandbox at the version cap whose API still runs an installed older binding and
@@ -7636,22 +7787,24 @@ mod tests {
     async fn a_blocked_rollout_reclaims_versions_no_binding_names() {
         use blocked_rollout::*;
         let image = FakeImage::at_cap();
-        let environment = std::collections::HashMap::from([(
-            "ALIEN_AGENTS_BINDING".to_string(),
-            binding_naming("30.0"),
-        )]);
-        let provider = provider_with_consumer_env(image.client(), environment);
-        let mut executor = executor_with_consumer(blocked_controller(), provider.clone()).await;
+        // The API reports the old binding it was applied with.
+        let observed = known(&["30.0"]);
+        let mut executor =
+            executor_with_consumer(blocked_controller(), image.client(), observed.clone(), true)
+                .await;
 
-        // Retries inside the fence: versions go inactive, and AWS is not asked to build again.
-        let mut refusals = 0;
+        // Inside the fence the roll waits on its saved state: versions go inactive, AWS is not
+        // asked to build, and the wait says when a slot frees.
         for _ in 0..8 {
-            match executor.step().await {
-                Ok(_) => {}
-                Err(_) => refusals += 1,
-            }
+            executor
+                .step()
+                .await
+                .expect("a draining image is a wait, not a failure");
         }
-        assert!(refusals > 0, "the build is withheld until a slot is free");
+        let waiting = executor.internal_state::<AwsSandboxController>().unwrap();
+        assert_eq!(waiting.state, AwsSandboxState::UpdatingImage);
+        let reason = waiting.get_progress().expect("the wait is visible");
+        assert!(reason.contains("becomes deletable at"), "{reason}");
         let retired = image.retire_calls.lock().unwrap().clone();
         assert!(
             retired.len() >= 40,
@@ -7686,9 +7839,9 @@ mod tests {
         let restored: AwsSandboxController =
             serde_json::from_value(serde_json::to_value(&saved).unwrap()).unwrap();
         drop(executor);
-        let mut executor = executor_with_consumer(restored, provider).await;
+        let mut executor = executor_with_consumer(restored, image.client(), observed, true).await;
         for _ in 0..40 {
-            let _ = executor.step().await;
+            executor.step().await.expect("the roll completes");
             if executor
                 .internal_state::<AwsSandboxController>()
                 .unwrap()
@@ -7700,10 +7853,109 @@ mod tests {
         }
         let controller = executor.internal_state::<AwsSandboxController>().unwrap();
         assert_eq!(controller.pending_version.as_deref(), Some("51.0"));
+        // The binding keeps naming the serving version until the new build is observed ACTIVE.
+        let binding = |controller: &AwsSandboxController| {
+            controller.get_binding_params().unwrap().unwrap()["imageVersion"].clone()
+        };
+        assert_eq!(binding(controller), "50.0");
+        for _ in 0..5 {
+            executor.step().await.expect("the build is observed");
+            if executor
+                .internal_state::<AwsSandboxController>()
+                .unwrap()
+                .pending_version
+                .is_none()
+            {
+                break;
+            }
+        }
+        let controller = executor.internal_state::<AwsSandboxController>().unwrap();
+        assert_eq!(controller.active_version.as_deref(), Some("51.0"));
+        assert_eq!(binding(controller), "51.0");
         let held = image.held();
         for kept in ["30.0", "49.0", "50.0"] {
             assert!(held.iter().any(|v| v == kept), "{kept} stays: {held:?}");
         }
         assert!(held.len() < CAP + 1);
+    }
+
+    /// Steps the blocked sandbox once and returns the image and the step's error text.
+    async fn step_blocked(
+        observed: Option<LaunchableSandboxVersions>,
+        desired_still_links: bool,
+    ) -> (Arc<blocked_rollout::FakeImage>, String) {
+        use blocked_rollout::*;
+        let image = FakeImage::at_cap();
+        let mut executor = executor_with_consumer(
+            blocked_controller(),
+            image.client(),
+            observed,
+            desired_still_links,
+        )
+        .await;
+        let outcome = executor.step().await;
+        (image, format!("{outcome:?}"))
+    }
+
+    /// A scheduler that cannot report what its replicas hold, or whose replica record can be gone
+    /// while an unacknowledged execution still runs. Neither is an empty answer: every replaced
+    /// version stays, and the refusal names who could not be proven.
+    #[tokio::test]
+    async fn an_unproven_dependent_keeps_every_replaced_version() {
+        let (image, error) = step_blocked(
+            Some(LaunchableSandboxVersions::Unproven {
+                reason: "a replica of an older server reports no bindings".to_string(),
+            }),
+            true,
+        )
+        .await;
+        assert!(image.retire_calls.lock().unwrap().is_empty());
+        assert_eq!(*image.build_calls.lock().unwrap(), 0);
+        assert!(error.contains("api"), "{error}");
+        assert!(error.contains("of 50 versions"), "{error}");
+    }
+
+    /// A dependent that does not observe bindings and is not running the config being applied
+    /// keeps the older behaviour: nothing is retired for it.
+    #[tokio::test]
+    async fn an_unobserved_dependent_on_an_older_config_keeps_every_replaced_version() {
+        let (image, _) = step_blocked(None, true).await;
+        assert!(image.retire_calls.lock().unwrap().is_empty());
+    }
+
+    /// The pending release dropped the API's link, but its applied revision still holds the
+    /// binding: its version stays while the rest is reclaimed.
+    #[tokio::test]
+    async fn a_removed_link_still_protects_the_applied_binding() {
+        let (image, _) = step_blocked(blocked_rollout::known(&["30.0"]), false).await;
+        let retired = image.retire_calls.lock().unwrap().clone();
+        assert!(!retired.is_empty());
+        assert!(!retired.iter().any(|v| v == "30.0"), "{retired:?}");
+    }
+
+    /// Two live bindings (both sides of a rollout) are both kept.
+    #[tokio::test]
+    async fn every_observed_binding_is_kept() {
+        let (image, _) = step_blocked(blocked_rollout::known(&["12.0", "30.0"]), true).await;
+        let retired = image.retire_calls.lock().unwrap().clone();
+        assert!(!retired.is_empty());
+        assert!(
+            !retired.iter().any(|v| v == "12.0" || v == "30.0"),
+            "{retired:?}"
+        );
+    }
+
+    /// A dependent that reports it holds no binding protects nothing.
+    #[tokio::test]
+    async fn a_dependent_holding_no_binding_protects_nothing() {
+        use blocked_rollout::*;
+        let image = FakeImage::at_cap();
+        let mut executor =
+            executor_with_consumer(blocked_controller(), image.client(), known(&[]), true).await;
+        for _ in 0..6 {
+            let _ = executor.step().await;
+        }
+        let retired = image.retire_calls.lock().unwrap().clone();
+        assert!(retired.iter().any(|v| v == "30.0"), "{retired:?}");
     }
 }
