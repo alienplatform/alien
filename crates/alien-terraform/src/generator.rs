@@ -2723,7 +2723,14 @@ fn stack_inputs_for_terraform(stack: &Stack, target: TerraformTarget) -> Vec<Sta
 /// release namespace, whatever the cluster's cloud: the output names it, as
 /// `alien_core::deployer_secret_location` does for a Kubernetes Secret binding.
 /// Resource types the chart binds through its `infrastructure` values.
-const CHART_BOUND_TYPES: &[&str] = &["storage", "queue", "kv", "artifact-registry", "vault"];
+const CHART_BOUND_TYPES: &[&str] = &[
+    "storage",
+    "queue",
+    "kv",
+    "artifact-registry",
+    "vault",
+    "redis",
+];
 
 /// `chart_infrastructure_json`: the chart's `infrastructure` values for the
 /// resources this module created, as JSON. Install the chart with it as the
@@ -6922,6 +6929,21 @@ fn retain_data_helper(
 
 #[cfg(test)]
 mod tests {
+    /// Every type the Operator's preflight requires as an external binding on Kubernetes must be
+    /// one the module hands the chart; otherwise the first release fails after Terraform succeeds.
+    #[test]
+    fn chart_bound_types_cover_the_kubernetes_preflight_required_types() {
+        for required in alien_preflights::deployment_prerequisites::external_binding_required_types(
+            alien_core::Platform::Kubernetes,
+        ) {
+            assert!(
+                super::CHART_BOUND_TYPES.contains(required),
+                "the preflight requires an external '{required}' binding on Kubernetes, but \
+                 the generator does not put '{required}' resources in the chart's infrastructure values"
+            );
+        }
+    }
+
     /// Each file the generator names, besides one per resource, is one an extension can't take
     /// the name of: an extension's Terraform modifier writes `<extension>.tf` beside them.
     #[test]
