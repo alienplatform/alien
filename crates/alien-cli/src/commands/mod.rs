@@ -2,6 +2,8 @@
 pub mod access_requests;
 pub mod api_keys;
 pub mod build;
+#[cfg(feature = "platform")]
+pub mod command_records;
 pub mod commands;
 #[cfg(feature = "platform")]
 pub mod customers;

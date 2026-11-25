@@ -12,7 +12,7 @@
 //!
 //! Env: `GCP_PROJECT`, `GCP_REGION`, `GCP_ENGINE` (bare id), `GCP_IMAGE`, `GCP_PREVIEW_SA`,
 //! `GCP_OWNER_TOKEN`, `GCP_ADMIN_TOKEN`, `GCP_NOEXEC_SA`, `GCP_NOEXEC_TOKEN`. Optional:
-//! `GCP_PREVIEW_PORTS` (default `8080,8081,8090`), `GCP_DAEMON_TOKEN` (the fixture's bearer).
+//! `GCP_INTERNET=1` (give the template internet egress; default off), `GCP_NETWORK_ATTACHMENT` (full path; the template gets that attachment and private ingress) with `GCP_PRIVATE_ENDPOINT` (`address:port` of the PSC endpoint), `GCP_PREVIEW_PORTS` (default `8080,8081,8090`), `GCP_DAEMON_TOKEN` (the fixture's bearer).
 //!
 //! Two tests, each run by its exact name, because they need different images:
 //!
@@ -34,7 +34,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use alien_bindings::providers::sandbox::gcp_agent_platform::{
-    EdgeTokenSigner, GcpAgentPlatformSandbox, IamEdgeTokenSigner,
+    EdgeTokenSigner, GcpAgentPlatformSandbox, IamEdgeTokenSigner, SignedEdgeToken,
 };
 use alien_bindings::traits::{CreateSandboxRequest, PreviewCapability, Sandbox};
 use alien_core::{GcpClientConfig, GcpCredentials};
@@ -91,17 +91,110 @@ fn provider(
     ports: &[u16],
 ) -> GcpAgentPlatformSandbox {
     let iam = alien_gcp_clients::iam::IamClient::new(reqwest::Client::new(), config(token.clone()));
-    GcpAgentPlatformSandbox::new(
-        Arc::new(client(token)),
+    let signer = signer(iam, signer_account);
+    let mut api: Arc<dyn alien_gcp_clients::gcp::agent_platform::AgentPlatformApi> =
+        Arc::new(client(token));
+    // `GCP_PRIVATE_ENDPOINT` (`address:port`) is the PSC endpoint of a template with a network
+    // attachment: its sandboxes answer only there, for `:execute` and for interactive commands.
+    let private = std::env::var("GCP_PRIVATE_ENDPOINT").ok().filter(|v| !v.is_empty());
+    if let Some(endpoint) = &private {
+        api = Arc::new(
+            alien_bindings::providers::sandbox::gcp_private_ingress::PrivateIngressClient::new(
+                api,
+                endpoint.clone(),
+                alien_core::sandbox_image::GCP_AGENT_PLATFORM.port,
+                signer.clone(),
+            ),
+        );
+    }
+    let provider = GcpAgentPlatformSandbox::new(
+        api,
         engine.to_string(),
         template.to_string(),
         Some(3600),
     )
-    .with_preview_signer(Arc::new(IamEdgeTokenSigner::new(
-        Arc::new(iam),
-        signer_account,
-    )))
-    .with_preview_ports(ports.to_vec())
+    .with_preview_signer(signer)
+    .with_preview_ports(ports.to_vec());
+    match private {
+        Some(endpoint) => provider.with_private_endpoint(endpoint),
+        None => provider,
+    }
+}
+
+/// Signs the edge credential through IAM, or, when `GCP_SIGNER_KEY_FILE` names the signer's own key
+/// file (a project where nobody may impersonate the signer), with that key through `openssl`.
+fn signer(iam: alien_gcp_clients::iam::IamClient, account: &str) -> Arc<dyn EdgeTokenSigner> {
+    match std::env::var("GCP_SIGNER_KEY_FILE") {
+        Ok(key_file) => Arc::new(KeyFileSigner {
+            key_file,
+            account: account.to_string(),
+        }),
+        Err(_) => Arc::new(IamEdgeTokenSigner::new(Arc::new(iam), account)),
+    }
+}
+
+#[derive(Debug)]
+struct KeyFileSigner {
+    key_file: String,
+    account: String,
+}
+
+#[async_trait::async_trait]
+impl EdgeTokenSigner for KeyFileSigner {
+    async fn sign(&self) -> alien_bindings::Result<SignedEdgeToken> {
+        use base64::Engine as _;
+        use std::io::Write;
+        let b64 = |bytes: &[u8]| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
+        let now = chrono::Utc::now().timestamp();
+        let key: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&self.key_file).expect("key file"))
+                .expect("json");
+        let header = b64(
+            serde_json::json!({"alg": "RS256", "typ": "JWT", "kid": key["private_key_id"]})
+                .to_string()
+                .as_bytes(),
+        );
+        let claims = b64(serde_json::json!({
+            "iat": now, "exp": now + 300, "iss": self.account, "sub": self.account,
+            "nonce": uuid::Uuid::new_v4().as_u128() % 1_000_000_000 + 1,
+            "aud": "https://aiplatform.googleapis.com/",
+        })
+        .to_string()
+        .as_bytes());
+        let input = format!("{header}.{claims}");
+        let pem = std::env::temp_dir().join(format!("edge-signer-{}.pem", uuid::Uuid::new_v4()));
+        // Created 0600 from the start, so no other user can read the key under any umask.
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&pem)
+                .expect("pem")
+                .write_all(key["private_key"].as_str().unwrap().as_bytes())
+                .expect("pem");
+        }
+        let mut child = std::process::Command::new("openssl")
+            .args(["dgst", "-sha256", "-sign"])
+            .arg(&pem)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .expect("openssl");
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(input.as_bytes())
+            .unwrap();
+        let signature = child.wait_with_output().expect("signature").stdout;
+        std::fs::remove_file(&pem).ok();
+        Ok(SignedEdgeToken {
+            jwt: format!("{input}.{}", b64(&signature)),
+            expires_at: now + 300,
+        })
+    }
 }
 
 /// Sends one request with the preview's headers, and the caller's bearer under the header the
@@ -346,11 +439,19 @@ impl Live {
                         extra: Default::default(),
                     }),
                     egress_control_config: Some(EgressControlConfig {
-                        internet_access: Some(false),
-                        network_attachment: None,
+                        internet_access: Some(std::env::var("GCP_INTERNET").is_ok_and(|v| v == "1")),
+                        network_attachment: std::env::var("GCP_NETWORK_ATTACHMENT")
+                            .ok()
+                            .filter(|v| !v.is_empty()),
                         extra: Default::default(),
                     }),
-                    ingress_control_config: None,
+                    ingress_control_config: std::env::var("GCP_NETWORK_ATTACHMENT")
+                        .ok()
+                        .filter(|v| !v.is_empty())
+                        .map(|_| alien_gcp_clients::gcp::agent_platform::IngressControlConfig {
+                            enable_private_service_connect: Some(true),
+                            extra: Default::default(),
+                        }),
                     state: None,
                     extra: Default::default(),
                 },
@@ -710,6 +811,127 @@ async fn live_preview_reaches_a_daemon_with_its_own_protocol() {
     })
     .catch_unwind()
     .await;
+    live.stop().await;
+    if let Err(panic) = outcome {
+        std::panic::resume_unwind(panic);
+    }
+}
+
+/// Interactive commands through the edge on a real sandbox: a command that streams for longer than
+/// the 300 second edge credential lives, takes input, ends with its own exit code, then a signal
+/// and a closed stdin. Same env and image as `live_preview_is_owner_access`; the image needs
+/// `/bin/sh` and coreutils.
+///
+/// ```text
+/// cargo test -p alien-bindings --features gcp --test gcp_sandbox_preview_live -- \
+///     --ignored --nocapture --exact live_interactive_commands_outlive_the_edge_credential
+/// ```
+#[tokio::test]
+#[ignore = "needs a live GCP project, an engine, an image and four identities"]
+async fn live_interactive_commands_outlive_the_edge_credential() {
+    use alien_bindings::traits::{CommandOutput, CommandSignal, RunCommandRequest};
+
+    let live = Live::start(&env("GCP_IMAGE"), &[8080]).await;
+    let sandbox_id = live.sandbox_id.clone();
+    let owner = &live.owner;
+    let sh = |script: &str, timeout: Duration| RunCommandRequest {
+        command: "/bin/sh".to_string(),
+        args: vec!["-c".to_string(), script.to_string()],
+        cwd: None,
+        env: Default::default(),
+        timeout,
+    };
+
+    let outcome = std::panic::AssertUnwindSafe(async {
+        assert!(
+            owner.capabilities().interactive_commands,
+            "a binding with the edge signer reports interactive commands"
+        );
+
+        // One tick a minute for seven minutes, then a line from stdin, then exit 5.
+        let started = std::time::Instant::now();
+        let mut command = owner
+            .run_interactive(
+                &sandbox_id,
+                sh(
+                    "i=0; while [ $i -lt 7 ]; do echo tick$i; i=$((i+1)); sleep 60; done; \
+                     read line; echo got:$line; exit 5",
+                    Duration::from_secs(900),
+                ),
+            )
+            .await
+            .expect("the stream opens");
+        let mut seen = Vec::new();
+        let mut last_tick = Duration::ZERO;
+        let mut sent = false;
+        let mut exit = None;
+        while let Some(item) = command.output.next().await {
+            match item.expect("a frame, not a transport failure") {
+                CommandOutput::Stdout { data, .. } => {
+                    let text = String::from_utf8_lossy(&data).to_string();
+                    eprintln!("[{:>4}s] {}", started.elapsed().as_secs(), text.trim_end());
+                    if text.contains("tick6") {
+                        last_tick = started.elapsed();
+                        // The write comes seven minutes in, long after the first credential ended.
+                        command.input.write(b"late\n").await.expect("late write");
+                        sent = true;
+                    }
+                    seen.push(text);
+                }
+                CommandOutput::Exit { code, .. } => exit = Some(code),
+                _ => {}
+            }
+        }
+        assert!(
+            sent && last_tick > Duration::from_secs(330),
+            "ticks reached past 5 minutes"
+        );
+        assert!(
+            seen.iter().any(|line| line.contains("got:late")),
+            "{seen:?}"
+        );
+        assert_eq!(exit, Some(5));
+        eprintln!(
+            "PASS long command: {}s, exit 5",
+            started.elapsed().as_secs()
+        );
+
+        // A signal ends a running command, and closing stdin ends a reader.
+        let command = owner
+            .run_interactive(&sandbox_id, sh("exec sleep 600", Duration::from_secs(900)))
+            .await
+            .expect("sleep starts");
+        command
+            .input
+            .signal(CommandSignal::Terminate)
+            .await
+            .expect("signal");
+        let ended: Vec<_> = command.output.collect().await;
+        let code = ended
+            .iter()
+            .find_map(|item| match item {
+                Ok(CommandOutput::Exit { code, .. }) => Some(*code),
+                _ => None,
+            })
+            .expect("a terminal frame");
+        assert_ne!(code, 0, "a signalled command does not exit cleanly");
+        eprintln!("PASS signal: exit {code}");
+
+        let command = owner
+            .run_interactive(&sandbox_id, sh("cat", Duration::from_secs(60)))
+            .await
+            .expect("cat starts");
+        command.input.write(b"x\n").await.expect("write");
+        command.input.close_stdin().await.expect("close");
+        let ended: Vec<_> = command.output.collect().await;
+        assert!(ended
+            .iter()
+            .any(|item| matches!(item, Ok(CommandOutput::Exit { code: 0, .. }))));
+        eprintln!("PASS close stdin");
+    })
+    .catch_unwind()
+    .await;
+
     live.stop().await;
     if let Err(panic) = outcome {
         std::panic::resume_unwind(panic);

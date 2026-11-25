@@ -837,6 +837,39 @@ fn emit_verifier_grants(
                     Expression::Array(vec![expr::raw("value")]),
                 )],
             )),
+            // Data-plane roles take minutes to reach the vault; writing the secret first is a 403.
+            attr(
+                "depends_on",
+                Expression::Array(vec![expr::traversal([
+                    "time_sleep",
+                    &format!("{vault}_setup_rbac"),
+                ])]),
+            ),
+        ],
+    ));
+    fragment.resource_blocks.push(resource_block(
+        "time_sleep",
+        &format!("{vault}_setup_rbac"),
+        [
+            attr("create_duration", Expression::String("60s".to_string())),
+            // A recreated vault or grant must wait again; `depends_on` only orders.
+            attr(
+                "triggers",
+                expr::object([
+                    (
+                        "vault_id",
+                        expr::traversal(["azurerm_key_vault", &vault, "id"]),
+                    ),
+                    (
+                        "principal_id",
+                        expr::traversal([
+                            "azurerm_role_assignment",
+                            &format!("{vault}_setup"),
+                            "principal_id",
+                        ]),
+                    ),
+                ]),
+            ),
             attr(
                 "depends_on",
                 Expression::Array(vec![expr::traversal([

@@ -1201,7 +1201,7 @@ fn parse_rfc3339_arg(value: &str) -> std::result::Result<DateTime<Utc>, String> 
         .ok_or_else(|| "expected an RFC3339 timestamp or YYYY-MM-DD (midnight UTC)".to_string())
 }
 
-fn parse_duration_arg(value: &str) -> std::result::Result<Duration, String> {
+pub(crate) fn parse_duration_arg(value: &str) -> std::result::Result<Duration, String> {
     let duration = parse_std_duration_arg(value)?;
     Duration::from_std(duration).map_err(|error| format!("duration is too large: {error}"))
 }

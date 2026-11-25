@@ -20,8 +20,9 @@ use tracing::warn;
 
 use crate::error::{ErrorData, Result};
 use crate::traits::{
-    Binding, CommandOutput, CreateSandboxRequest, JobError, JobExit, JobPoll, JobStart,
-    PreviewCapability, ResolvedSandbox, RunCommandRequest, Sandbox, SandboxInstance, SandboxState,
+    Binding, CommandOutput, CreateSandboxRequest, InteractiveCommand, JobError, JobExit, JobPoll,
+    JobStart, PreviewCapability, ResolvedSandbox, RunCommandRequest, Sandbox, SandboxInstance,
+    SandboxState,
 };
 use alien_core::{SandboxCapabilities, SandboxEgress};
 use alien_error::{AlienError, Context, ContextError};
@@ -260,9 +261,127 @@ pub struct GcpAgentPlatformSandbox {
     preview_signer: Option<Arc<dyn EdgeTokenSigner>>,
     /// Ports the declaration names for preview; any other is refused before a call is spent.
     preview_ports: Vec<u16>,
+    /// `address:port` of the deployment's private endpoint, when the template has private ingress.
+    /// Interactive commands reach the agent there over plain HTTP, as `:execute` does through
+    /// `PrivateIngressClient`; without it they use the sandbox's own edge host over HTTPS.
+    private_endpoint: Option<String>,
+    /// Carries interactive commands. No total timeout: a command's stream lasts as long as it runs.
+    edge_http: reqwest::Client,
     /// Granted capabilities, per sandbox and port. Only the grant is cached: the routing token
     /// and edge credential are short-lived and read fresh for every call.
     grants: std::sync::Mutex<std::collections::HashMap<(String, u16), CachedGrant>>,
+}
+
+/// An edge credential with less than this left is signed again, so a keystroke costs no IAM call
+/// and a command that outlives one credential keeps going.
+const EDGE_REFRESH_MARGIN_SECONDS: i64 = 60;
+
+/// One sandbox's agent, reached through the sandbox edge for as long as an interactive command
+/// runs. Every request carries the edge credential, the sandbox's routing token and the agent's
+/// port, the same three headers preview sends.
+struct GcpEdgeAgent {
+    http: reqwest::Client,
+    /// Read again with each new credential: the routing token is short-lived.
+    client: Arc<dyn AgentPlatformApi>,
+    engine: String,
+    sandbox_id: String,
+    /// `address:port` of the private endpoint, when the template has one (plain HTTP).
+    private_endpoint: Option<String>,
+    signer: Arc<dyn EdgeTokenSigner>,
+    /// The target in use, kept until shortly before the credential ends.
+    edge: tokio::sync::Mutex<Option<EdgeTarget>>,
+}
+
+/// What one edge request needs, valid until `expires_at` (the edge credential's end).
+#[derive(Clone)]
+struct EdgeTarget {
+    /// Scheme and authority, no trailing slash.
+    base: String,
+    routing_token: String,
+    jwt: String,
+    expires_at: i64,
+}
+
+impl GcpEdgeAgent {
+    /// Where to send a request and with what: the credential signed again, and the host and
+    /// routing token read again, once less than the refresh margin is left.
+    async fn target(&self) -> Result<EdgeTarget> {
+        let mut edge = self.edge.lock().await;
+        let now = chrono::Utc::now().timestamp();
+        if let Some(target) = edge.as_ref() {
+            if target.expires_at - now > EDGE_REFRESH_MARGIN_SECONDS {
+                return Ok(target.clone());
+            }
+        }
+        let unreachable = |reason: &str| {
+            AlienError::new(ErrorData::SandboxUnreachable {
+                operation: super::agent_protocol::RUN_INTERACTIVE.to_string(),
+                reason: reason.to_string(),
+            })
+        };
+        let sandbox = self
+            .client
+            .get_sandbox(&self.engine, &self.sandbox_id)
+            .await
+            .context(ErrorData::SandboxUnreachable {
+                operation: super::agent_protocol::RUN_INTERACTIVE.to_string(),
+                reason: "the Agent Platform API did not answer a sandbox read".to_string(),
+            })?;
+        let connection = sandbox.connection_info.as_ref();
+        let base = match &self.private_endpoint {
+            Some(endpoint) => format!("http://{endpoint}"),
+            None => format!(
+                "https://{}",
+                connection
+                    .and_then(|info| info.load_balancer_hostname.clone())
+                    .ok_or_else(|| unreachable("the sandbox has no edge host yet"))?
+            ),
+        };
+        let routing_token = connection
+            .and_then(|info| info.routing_token.clone())
+            .ok_or_else(|| unreachable("the sandbox has no routing token yet"))?;
+        let signed = self.signer.sign().await?;
+        let target = EdgeTarget {
+            base,
+            routing_token,
+            jwt: signed.jwt,
+            expires_at: signed.expires_at,
+        };
+        *edge = Some(target.clone());
+        Ok(target)
+    }
+}
+
+impl std::fmt::Debug for GcpEdgeAgent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GcpEdgeAgent")
+            .field("sandbox_id", &self.sandbox_id)
+            .finish_non_exhaustive()
+    }
+}
+
+#[async_trait]
+impl super::interactive::BoundAgent for GcpEdgeAgent {
+    async fn request(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+    ) -> Result<reqwest::RequestBuilder> {
+        let target = self.target().await?;
+        Ok(self
+            .http
+            .request(method, format!("{}{path}", target.base))
+            .bearer_auth(target.jwt)
+            .header("X-Sandbox-Routing-Token", target.routing_token)
+            .header(
+                "X-Sandbox-Port",
+                alien_core::sandbox_image::AGENT_PORT.to_string(),
+            ))
+    }
+
+    fn provider(&self) -> &'static str {
+        "gcp-agent-platform"
+    }
 }
 
 /// Mints the credential the sandbox edge requires on every ingress request: a JWT signed by a
@@ -659,8 +778,16 @@ impl GcpAgentPlatformSandbox {
             max_lifetime_seconds,
             preview_signer: None,
             preview_ports: Vec::new(),
+            private_endpoint: None,
+            edge_http: reqwest::Client::new(),
             grants: Default::default(),
         }
+    }
+
+    /// Tells interactive commands to reach sandboxes through the deployment's private endpoint.
+    pub fn with_private_endpoint(mut self, endpoint: impl Into<String>) -> Self {
+        self.private_endpoint = Some(endpoint.into());
+        self
     }
 
     /// The engine id sent to the client. Exists so a test can prove the binding's full resource
@@ -1642,8 +1769,14 @@ impl Sandbox for GcpAgentPlatformSandbox {
     /// The platform's row, unnarrowed. `sandboxLifetime` stays true even with no declared ttl:
     /// the API always sets `expireTime` on output, so an undeclared sandbox still carries a
     /// deadline the platform enforces.
+    ///
+    /// `interactiveCommands` is narrowed to what this binding can do: the stream goes through the
+    /// sandbox's edge, so a binding without the signing identity (a manager-resolved one, or an
+    /// install whose setup predates it) cannot run one and says so here instead of at the call.
     fn capabilities(&self) -> SandboxCapabilities {
-        SandboxCapabilities::gcp_agent_platform()
+        let mut capabilities = SandboxCapabilities::gcp_agent_platform();
+        capabilities.interactive_commands = self.preview_signer.is_some();
+        capabilities
     }
 
     async fn create(&self, request: CreateSandboxRequest) -> Result<SandboxInstance> {
@@ -1960,6 +2093,49 @@ impl Sandbox for GcpAgentPlatformSandbox {
         } else {
             self.run_detached(sandbox_id, request).await
         }
+    }
+
+    /// Streams a command through the sandbox's edge to the agent's own `/v1/interactive`, the
+    /// protocol every other backend's interactive commands use. `:execute` answers one request in
+    /// about 30 seconds and cannot carry input, so it is not on this path.
+    async fn run_interactive(
+        &self,
+        sandbox_id: &str,
+        request: RunCommandRequest,
+    ) -> Result<InteractiveCommand> {
+        use super::agent_protocol::RUN_INTERACTIVE;
+        Self::checked_sandbox_id(RUN_INTERACTIVE, sandbox_id)?;
+        Self::checked_command(RUN_INTERACTIVE, &request)?;
+        let Some(signer) = &self.preview_signer else {
+            return Err(self.unsupported(
+                RUN_INTERACTIVE,
+                "this deployment has no edge signing identity, which interactive commands need \
+                 to reach the agent; update the deployment's setup so it is created",
+            ));
+        };
+        let request = self.with_proxy_env(sandbox_id, request).await?;
+
+        let unreachable = |reason: &str| {
+            AlienError::new(ErrorData::SandboxUnreachable {
+                operation: RUN_INTERACTIVE.to_string(),
+                reason: reason.to_string(),
+            })
+        };
+        let agent = Arc::new(GcpEdgeAgent {
+            http: self.edge_http.clone(),
+            client: Arc::clone(&self.client),
+            engine: self.engine.clone(),
+            sandbox_id: sandbox_id.to_string(),
+            private_endpoint: self.private_endpoint.clone(),
+            signer: Arc::clone(signer),
+            edge: tokio::sync::Mutex::new(None),
+        });
+        // A sandbox that does not exist is refused before the command starts; its edge host and
+        // routing token are read with each credential.
+        self.read_sandbox(RUN_INTERACTIVE, sandbox_id)
+            .await?
+            .ok_or_else(|| unreachable("the sandbox does not exist"))?;
+        super::interactive::run_interactive(agent, request).await
     }
 
     async fn start_job(&self, sandbox_id: &str, request: RunCommandRequest) -> Result<JobStart> {

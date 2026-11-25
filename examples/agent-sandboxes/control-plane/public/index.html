@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Agent sandboxes</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.45 system-ui, sans-serif; display: grid; grid-template-columns: 240px 1fr; height: 100vh; color: #1d1d1f; }
+  aside { border-right: 1px solid #ddd; padding: 12px; display: flex; flex-direction: column; gap: 8px; overflow: auto; }
+  aside button.thread { text-align: left; border: 1px solid #ddd; background: #fff; padding: 8px; border-radius: 6px; cursor: pointer; }
+  aside button.thread.active { border-color: #2563eb; background: #eff6ff; }
+  .state { font-size: 12px; color: #666; }
+  main { display: grid; grid-template-rows: auto 1fr auto auto; min-height: 0; }
+  header { padding: 10px 16px; border-bottom: 1px solid #ddd; display: flex; gap: 12px; align-items: center; }
+  #log { overflow: auto; padding: 16px; display: flex; flex-direction: column; gap: 8px; }
+  .msg { padding: 8px 10px; border-radius: 6px; white-space: pre-wrap; word-break: break-word; max-width: 900px; }
+  .user { background: #eff6ff; align-self: flex-end; }
+  .assistant { background: #f5f5f7; }
+  .tool { background: #fffbeb; font-family: ui-monospace, monospace; font-size: 12px; }
+  .notice { color: #666; font-size: 12px; }
+  .exec { background: #111; color: #eee; font-family: ui-monospace, monospace; font-size: 12px; }
+  #approvals { padding: 0 16px; }
+  .approval { border: 1px solid #f59e0b; background: #fffbeb; border-radius: 6px; padding: 10px; margin: 8px 0; display: flex; gap: 12px; align-items: center; }
+  form { display: flex; gap: 8px; padding: 12px 16px; border-top: 1px solid #ddd; }
+  form input[type=text] { flex: 1; padding: 8px; }
+  button { padding: 6px 12px; }
+</style>
+</head>
+<body>
+<aside>
+  <button type="button" id="new">New thread</button>
+  <div id="threads"></div>
+</aside>
+<main>
+  <header>
+    <strong id="title">Pick or start a thread</strong>
+    <span class="state" id="state"></span>
+    <label style="margin-left:auto">User
+      <select id="user"><option>alice</option><option>bob</option></select>
+    </label>
+    <label>Approve as
+      <select id="approver"><option>manager</option><option>alice</option><option>bob</option></select>
+    </label>
+  </header>
+  <div id="log"></div>
+  <div id="approvals"></div>
+  <div>
+    <form id="send"><input type="text" id="text" placeholder="Message the agent" autocomplete="off"><button type="submit">Send</button></form>
+    <form id="exec"><input type="text" id="command" placeholder="Run in sandbox, e.g. env | sort" autocomplete="off"><button type="submit">Run</button></form>
+  </div>
+</main>
+<script src="/app.js"></script>
+</body>
+</html>

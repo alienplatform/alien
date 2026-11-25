@@ -18,6 +18,7 @@ Each example is a self-contained template you can initialize with `alien init`.
 | [byob-storage-ts](./byob-storage-ts) | Provision customer-owned object storage and access it from an external SaaS backend. | TypeScript |
 | [customer-keys-ts](./customer-keys-ts) | Encrypt data with a key controlled by each customer. | TypeScript |
 | [ai-chatbot-ts](./ai-chatbot-ts) | Answer questions about a private Postgres with ambient cloud models. | TypeScript |
+| [agent-sandboxes](./agent-sandboxes) | Run a coding agent in one sandbox per conversation in each customer's cloud, reaching private systems only through an approved connector. | TypeScript |
 | [extensions/postgres-iam-auth](./extensions/postgres-iam-auth) | An extension that turns on IAM authentication for Alien's Postgres on every setup path. | Rust |
 | [extensions/postgres-backup-retention](./extensions/postgres-backup-retention) | An extension that keeps Postgres backups for 30 days in every setup template. | Rust |
 | [extensions/resource-tags](./extensions/resource-tags) | An extension that adds your tags to the resources Alien's controllers create. | Rust |

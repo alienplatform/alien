@@ -92,6 +92,12 @@ pub struct AiUsageEvent {
     pub tokens: AiTokenUsage,
 }
 
+/// Tokens a batch request already spent before one of its calls failed. A failed reply carries no
+/// usage of its own, so the handler attaches this to the response and it is reported with the
+/// failure.
+#[derive(Clone, Debug)]
+pub(crate) struct SpentBeforeFailure(pub(crate) AiTokenUsage);
+
 #[derive(Clone, Debug)]
 pub(crate) struct ProviderErrorBody {
     pub(crate) body: String,
@@ -227,6 +233,7 @@ struct ObservedBody {
     streamed_tokens: AiTokenUsage,
     status: u16,
     provider_error_body: Option<ProviderErrorBody>,
+    spent_before_failure: AiTokenUsage,
     complete: bool,
 }
 
@@ -299,7 +306,7 @@ impl ObservedBody {
             merge_usage(&mut tokens, std::mem::take(&mut self.streamed_tokens));
             tokens
         } else {
-            AiTokenUsage::default()
+            std::mem::take(&mut self.spent_before_failure)
         };
         context.observe(
             &self.observer,
@@ -330,6 +337,11 @@ pub(crate) fn observe_response(
     let (mut parts, body) = response.into_parts();
     let status = parts.status.as_u16();
     let provider_error_body = parts.extensions.remove::<ProviderErrorBody>();
+    let spent_before_failure = parts
+        .extensions
+        .remove::<SpentBeforeFailure>()
+        .map(|spent| spent.0)
+        .unwrap_or_default();
     let state = ObservedBody {
         inner: Box::pin(body.into_data_stream()),
         observer: Arc::clone(observer),
@@ -340,6 +352,7 @@ pub(crate) fn observe_response(
         streamed_tokens: AiTokenUsage::default(),
         status,
         provider_error_body,
+        spent_before_failure,
         complete: false,
     };
     let stream = futures::stream::unfold(state, |mut state| async move {
@@ -371,6 +384,7 @@ pub(crate) fn observe_gateway_error(
     observer: Option<&Arc<dyn AiUsageObserver>>,
     context: AiUsageContext,
     status: u16,
+    spent_before_failure: AiTokenUsage,
 ) {
     if let Some(observer) = observer {
         context.observe(
@@ -378,7 +392,7 @@ pub(crate) fn observe_gateway_error(
             AiUsageOutcome::GatewayError,
             status,
             None,
-            AiTokenUsage::default(),
+            spent_before_failure,
         );
     }
 }
@@ -572,6 +586,7 @@ mod tests {
             streamed_tokens: AiTokenUsage::default(),
             status: 200,
             provider_error_body: None,
+            spent_before_failure: AiTokenUsage::default(),
             complete: false,
         };
         drop(state);

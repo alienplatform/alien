@@ -1,0 +1,18 @@
+{
+  "name": "agent-sandboxes",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "cd data-plane && alien dev",
+    "build": "cd data-plane && alien build --platform local",
+    "control-plane": "pnpm --filter @agent-sandboxes/control-plane start",
+    "test": "vitest run",
+    "test:ts": "pnpm -r --filter './data-plane/*' --filter './control-plane' test:ts"
+  },
+  "devDependencies": {
+    "@alienplatform/core": "^3.3.72",
+    "typescript": "^5.7.3",
+    "vitest": "^4.1.12"
+  }
+}

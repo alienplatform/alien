@@ -1,0 +1,3 @@
+name = "agent-sandboxes"
+description = "Run one sandbox per conversation in each customer's cloud, with a coding agent that reaches private systems only through a connector."
+language = "TypeScript"

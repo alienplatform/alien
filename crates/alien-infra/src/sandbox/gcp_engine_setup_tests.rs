@@ -691,6 +691,43 @@ async fn a_setup_rerun_updates_only_when_the_profiles_changed() {
     );
 }
 
+/// An engine reconciled before the preview signer existed has its grants saved and no signer:
+/// a setup rerun asks for the update that creates it, and then none again.
+#[tokio::test]
+async fn a_setup_rerun_creates_the_missing_signer_for_an_unchanged_engine() {
+    let calls = Arc::new(Mutex::new(Calls::default()));
+    let (iam, platform) = clients(&calls);
+    let mut first = executor(iam, platform, true).await;
+    first.run_until_terminal().await.expect("create runs");
+    let mut controller = first
+        .internal_state::<GcpAgentPlatformTemplateController>()
+        .unwrap()
+        .clone();
+    assert!(controller.preview_service_account.is_some());
+    assert!(controller.reconciled_grants.is_some());
+    controller.preview_service_account = None;
+
+    let calls = Arc::new(Mutex::new(Calls::default()));
+    let (iam, platform) = clients(&calls);
+    let mut executor = executor_seeded(iam, platform, true, false, false, controller).await;
+    assert!(
+        executor.needs_update().unwrap(),
+        "saved grants and no signer ask for the update"
+    );
+    executor
+        .update(sandbox(vec![8080], alien_core::SandboxEgress::None))
+        .expect("update is accepted");
+    executor.run_until_terminal().await.expect("update runs");
+    let controller = executor
+        .internal_state::<GcpAgentPlatformTemplateController>()
+        .unwrap();
+    assert!(controller.preview_service_account.is_some());
+    assert!(
+        !executor.needs_update().unwrap(),
+        "the update settled the check"
+    );
+}
+
 /// An install moved to another manager identity gets the management grant again: the identity is
 /// an input of the reconcile, though the stack does not name it.
 #[tokio::test]
@@ -803,7 +840,7 @@ mod differential {
     enum Case {
         /// Preview ports: the signer signs the preview edge credential.
         Preview,
-        /// Published for remote use, no preview ports: no signer.
+        /// Published for remote use, no preview ports: no signer in the package.
         Remote,
         /// `internet` with no preview ports: its private ingress answers only to the edge
         /// credential, so the signer is still created.
@@ -1011,19 +1048,16 @@ mod differential {
             .await;
             let mut record = Default::default();
             executor.with_context(|ctx| {
-                futures::executor::block_on(
-                    crate::sandbox::gcp_engine_setup::set_up_engine_access(
-                        ctx,
-                        &case.sandbox(),
-                        "eng",
-                        &mut record,
-                    ),
-                )
+                futures::executor::block_on(crate::sandbox::gcp_engine_setup::set_up_engine_access(
+                    ctx,
+                    &case.sandbox(),
+                    "eng",
+                    &mut record,
+                ))
                 .expect("engine access is placed")
             });
         } else {
-            let mut executor =
-                executor_full(iam, platform, true, true, case == Case::Remote).await;
+            let mut executor = executor_full(iam, platform, true, true, case == Case::Remote).await;
             executor.run_until_terminal().await.expect("create runs");
         }
         let calls = calls.lock().unwrap();
@@ -1034,14 +1068,26 @@ mod differential {
     /// setup grants the same identities the same permissions, and nothing else.
     #[tokio::test]
     async fn direct_setup_grants_what_the_package_renders() {
-        for case in [Case::Preview, Case::Remote, Case::Internet] {
+        // `Remote` is compared separately: direct setup gives every sandbox the signer for
+        // interactive commands, and the package does not, so an install that manages its custom
+        // roles outside the module needs no new role to upgrade.
+        let package = rendered(Case::Remote);
+        assert!(
+            package.signer.is_empty(),
+            "the package adds no signer: {package:?}"
+        );
+        assert!(!direct(Case::Remote).await.signer.is_empty());
+        for case in [Case::Preview, Case::Internet] {
             let package = rendered(case);
             assert!(
                 !package.engine.is_empty(),
                 "the comparison is empty ({case:?}), so it proves nothing"
             );
             let direct = direct(case).await;
-            assert_eq!(direct, package, "direct setup and the package differ ({case:?})");
+            assert_eq!(
+                direct, package,
+                "direct setup and the package differ ({case:?})"
+            );
         }
     }
 
