@@ -62,8 +62,9 @@ pub const NO_LINKS_GATEWAY_DIGESTS: &[&str] = &[
 
 /// Gateway images pinned before admin protocol 2: per-sandbox credential rules, the stable
 /// sandbox CA and the preview relay. A binding that needs protocol 2 cannot use a gateway on one
-/// of these, and every check that would lead to one gives [`CREDENTIALS_UNAVAILABLE`]. The list
-/// never grows: the release that pins a gateway serving protocol 2 opens the feature.
+/// of these, and every check that would lead to one gives [`CREDENTIALS_UNAVAILABLE`]. An entry is
+/// added only for an image that was pinned and serves protocol 1; the pin itself must never be
+/// on this list.
 pub const NO_CREDENTIALS_GATEWAY_DIGESTS: &[&str] = &[
     "sha256:dbac794afe2185a8ce025d92ec05a5878d6367ae9380eccc2c3dfc4d55f1c59c",
     "sha256:1dc14128e34426b84c7a02228a6de790ea092b156776c3f2688b9843b26fc924",
