@@ -1327,13 +1327,11 @@ impl GcpAgentPlatformTemplateController {
                 &self.engine_setup,
             )
             .await?;
-        } else if config.needs_gcp_edge_signer()
-            && ctx.initial_setup_authority == alien_core::InitialSetupAuthority::DirectSetup
-        {
+        } else if ctx.initial_setup_authority == alien_core::InitialSetupAuthority::DirectSetup {
             // The record may have been dropped by an older manager rewriting the state; the
             // signer's own description still names this deployment. Only a direct-setup
-            // deployment with preview ports or an internet sandbox can have a signer, and a package install's
-            // management identity cannot read service accounts (GCP answers 403).
+            // deployment can have one of ours; a package install's management identity cannot
+            // read service accounts (GCP answers 403).
             crate::sandbox::gcp_engine_setup::remove_marked_signer(ctx, &config.id).await?;
         }
         self.clear_state();
@@ -1367,6 +1365,11 @@ impl GcpAgentPlatformTemplateController {
             && ctx.is_direct_setup_run())
         {
             return Ok(false);
+        }
+        // The preview signer is placed by the same run as the grants. An engine reconciled before
+        // the signer existed has the grants saved and no signer, so it counts as out of date.
+        if self.preview_service_account.is_none() {
+            return Ok(true);
         }
         Ok(self.reconciled_grants.as_deref()
             != Some(
@@ -1648,6 +1651,29 @@ mod tests {
                 },
             ))
         });
+        // Every sandbox's setup now creates the edge signer; teardown deletes it again.
+        iam.expect_create_service_account().returning(|id, _| {
+            Ok(alien_gcp_clients::iam::ServiceAccount::builder()
+                .email(format!("{id}@p.iam.gserviceaccount.com"))
+                .build())
+        });
+        iam.expect_delete_service_account().returning(|_| Ok(()));
+        iam.expect_get_role().returning(|name| {
+            Err(alien_error::AlienError::new(
+                alien_client_core::ErrorData::RemoteResourceNotFound {
+                    resource_type: "Role".to_string(),
+                    resource_name: name,
+                },
+            ))
+        });
+        iam.expect_create_role()
+            .returning(|_, _| Ok(alien_gcp_clients::iam::Role::builder().build()));
+        iam.expect_delete_role()
+            .returning(|_| Ok(alien_gcp_clients::iam::Role::builder().build()));
+        iam.expect_get_service_account_iam_policy()
+            .returning(|_| Ok(Default::default()));
+        iam.expect_set_service_account_iam_policy()
+            .returning(|_, policy| Ok(policy));
         let iam = Arc::new(iam);
         provider
             .expect_get_gcp_iam_client()
@@ -1668,6 +1694,11 @@ mod tests {
     /// A project that has never hosted a sandbox: no engines, so no templates.
     fn serve_empty_project(m: &mut MockAgentPlatformApi) {
         m.expect_list_engines().returning(|| Ok(Vec::new()));
+        // The signer holds the execute verb on the engine.
+        m.expect_get_engine_iam_policy()
+            .returning(|_| Ok(Default::default()));
+        m.expect_set_engine_iam_policy()
+            .returning(|_, policy| Ok(policy));
     }
 
     async fn build_executor(

@@ -177,157 +177,155 @@ pub(crate) async fn set_up_engine_access(
     let mut grants: Vec<(String, String)> = Vec::new();
     let mut signer_email = None;
 
-    if sandbox.needs_gcp_edge_signer() {
-        let iam = ctx.service_provider.get_gcp_iam_client(gcp_config)?;
-        let account_id = preview_signer_account_id(ctx.resource_prefix, &sandbox.id);
-        let email = format!(
-            "{account_id}@{}.iam.gserviceaccount.com",
-            gcp_config.project_id
-        );
-        let owner = crate::setup_owner::owner_value(
-            ctx.resource_prefix,
-            &sandbox.id,
-            ctx.setup_owner_deployment_id()?,
-        );
-        let marker = crate::setup_owner::description_marker(&owner);
-        let created = iam
-            .create_service_account(
-                account_id.clone(),
-                CreateServiceAccountRequest::builder()
-                    .service_account(
-                        GcpServiceAccount::builder()
-                            .display_name("Preview edge signer".to_string())
-                            .description(format!(
-                                "Signs the short-lived credential the Agent Platform edge checks \
-                                 for preview. Holds the execute verb on this deployment's engine \
+    let iam = ctx.service_provider.get_gcp_iam_client(gcp_config)?;
+    let account_id = preview_signer_account_id(ctx.resource_prefix, &sandbox.id);
+    let email = format!(
+        "{account_id}@{}.iam.gserviceaccount.com",
+        gcp_config.project_id
+    );
+    let owner = crate::setup_owner::owner_value(
+        ctx.resource_prefix,
+        &sandbox.id,
+        ctx.setup_owner_deployment_id()?,
+    );
+    let marker = crate::setup_owner::description_marker(&owner);
+    let created = iam
+        .create_service_account(
+            account_id.clone(),
+            CreateServiceAccountRequest::builder()
+                .service_account(
+                    GcpServiceAccount::builder()
+                        .display_name("Preview edge signer".to_string())
+                        .description(format!(
+                            "Signs the short-lived credential the Agent Platform edge checks \
+                                 for commands, preview and private ingress. Holds the execute verb on this deployment's engine \
                                  and nothing else. {marker}"
-                            ))
-                            .build(),
-                    )
-                    .build(),
-            )
-            .await;
-        match created {
-            Ok(_) => {
+                        ))
+                        .build(),
+                )
+                .build(),
+        )
+        .await;
+    match created {
+        Ok(_) => {
+            record.signer_created = Some(email.clone());
+        }
+        Err(error)
+            if matches!(
+                error.error,
+                Some(alien_client_core::ErrorData::RemoteResourceConflict { .. })
+            ) =>
+        {
+            // Taken over only when it carries this deployment's marker, which proves an
+            // earlier attempt of this setup made it. Teardown deletes only what is recorded.
+            let existing = iam.get_service_account(email.clone()).await.context(
+                ErrorData::CloudPlatformError {
+                    message: format!("Failed to read the existing service account {email}"),
+                    resource_id: Some(sandbox.id.clone()),
+                },
+            )?;
+            if existing.description.as_deref().is_some_and(|description| {
+                crate::setup_owner::description_names_owner(description, &owner)
+            }) {
                 record.signer_created = Some(email.clone());
-            }
-            Err(error)
-                if matches!(
-                    error.error,
-                    Some(alien_client_core::ErrorData::RemoteResourceConflict { .. })
-                ) =>
-            {
-                // Taken over only when it carries this deployment's marker, which proves an
-                // earlier attempt of this setup made it. Teardown deletes only what is recorded.
-                let existing = iam.get_service_account(email.clone()).await.context(
-                    ErrorData::CloudPlatformError {
-                        message: format!("Failed to read the existing service account {email}"),
-                        resource_id: Some(sandbox.id.clone()),
-                    },
-                )?;
-                if existing.description.as_deref().is_some_and(|description| {
-                    crate::setup_owner::description_names_owner(description, &owner)
-                }) {
-                    record.signer_created = Some(email.clone());
-                } else {
-                    return Err(AlienError::new(ErrorData::CloudPlatformError {
-                        message: format!(
-                            "service account {email} already exists and this deployment did \
+            } else {
+                return Err(AlienError::new(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "service account {email} already exists and this deployment did \
                              not create it. Setup will not take it over, because destroying \
                              the deployment would delete it. Delete it, or install from the \
                              Terraform setup package, which imports it."
-                        ),
-                        resource_id: Some(sandbox.id.clone()),
-                    }));
-                }
-            }
-            Err(error) => {
-                return Err(
-                    ResourcePermissionsHelper::gcp_service_account_creation_error(
-                        error,
-                        &gcp_config.project_id,
                     ),
-                );
+                    resource_id: Some(sandbox.id.clone()),
+                }));
             }
         }
-        grants.extend(engine_grants_for(ctx, &sandbox.id, engine, PREVIEW_EDGE, &email).await?);
-
-        // The role holding only signJwt, project-wide with a fixed id, bound on the signer for
-        // each identity that executes in this sandbox.
-        let owners = execute_owner_emails(ctx, &sandbox.id)?;
-        let wanted: Vec<String> = owners
-            .iter()
-            .map(|owner| format!("serviceAccount:{owner}"))
-            .collect();
-        let dropped: Vec<String> = record
-            .sign_members
-            .iter()
-            .filter(|member| !wanted.contains(member))
-            .cloned()
-            .collect();
-        if !owners.is_empty() || !dropped.is_empty() {
-            let naming = GcpCustomRoleNaming::for_deployment(ctx.state)?;
-            let role_id = format!(
-                "role_{}_sandbox_preview_sign",
-                naming.namespace(ctx.resource_prefix)
+        Err(error) => {
+            return Err(
+                ResourcePermissionsHelper::gcp_service_account_creation_error(
+                    error,
+                    &gcp_config.project_id,
+                ),
             );
-            let role_name = format!("projects/{}/roles/{role_id}", gcp_config.project_id);
-            if !owners.is_empty() {
-                ResourcePermissionsHelper::ensure_gcp_custom_roles(
-                    ctx,
-                    PREVIEW_EDGE,
-                    vec![GcpCustomRole {
-                        role_id: role_id.clone(),
-                        name: role_name.clone(),
-                        title: "Sign the preview edge credential".to_string(),
-                        description: format!(
-                            "Sign a JWT as the preview edge signer. Granted on that one service \
+        }
+    }
+    grants.extend(engine_grants_for(ctx, &sandbox.id, engine, PREVIEW_EDGE, &email).await?);
+
+    // The role holding only signJwt, project-wide with a fixed id, bound on the signer for
+    // each identity that executes in this sandbox.
+    let owners = execute_owner_emails(ctx, &sandbox.id)?;
+    let wanted: Vec<String> = owners
+        .iter()
+        .map(|owner| format!("serviceAccount:{owner}"))
+        .collect();
+    let dropped: Vec<String> = record
+        .sign_members
+        .iter()
+        .filter(|member| !wanted.contains(member))
+        .cloned()
+        .collect();
+    if !owners.is_empty() || !dropped.is_empty() {
+        let naming = GcpCustomRoleNaming::for_deployment(ctx.state)?;
+        let role_id = format!(
+            "role_{}_sandbox_preview_sign",
+            naming.namespace(ctx.resource_prefix)
+        );
+        let role_name = format!("projects/{}/roles/{role_id}", gcp_config.project_id);
+        if !owners.is_empty() {
+            ResourcePermissionsHelper::ensure_gcp_custom_roles(
+                ctx,
+                PREVIEW_EDGE,
+                vec![GcpCustomRole {
+                    role_id: role_id.clone(),
+                    name: role_name.clone(),
+                    title: "Sign the preview edge credential".to_string(),
+                    description: format!(
+                        "Sign a JWT as the preview edge signer. Granted on that one service \
                              account. Resource prefix: {}.",
-                            ctx.resource_prefix
-                        ),
-                        included_permissions: vec![SIGN_JWT_PERMISSION.to_string()],
-                        stage: "GA".to_string(),
-                    }],
-                )
-                .await?;
-                record.sign_role = Some(role_name.clone());
+                        ctx.resource_prefix
+                    ),
+                    included_permissions: vec![SIGN_JWT_PERMISSION.to_string()],
+                    stage: "GA".to_string(),
+                }],
+            )
+            .await?;
+            record.sign_role = Some(role_name.clone());
+        }
+        let mut policy = iam
+            .get_service_account_iam_policy(email.clone())
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to read the preview signer's IAM policy".to_string(),
+                resource_id: Some(sandbox.id.clone()),
+            })?;
+        // Remember old and new until the write lands, so a failure part-way still lets
+        // teardown (or the next run) remove what was bound.
+        let mut remembered = record.sign_members.clone();
+        for member in &wanted {
+            if !remembered.contains(member) {
+                remembered.push(member.clone());
             }
-            let mut policy = iam
-                .get_service_account_iam_policy(email.clone())
+        }
+        record.sign_members = remembered;
+        let mut changed = false;
+        for member in &wanted {
+            changed |= bind_member(&mut policy, &role_name, member);
+        }
+        for member in &dropped {
+            changed |= unbind_member(&mut policy, &role_name, member);
+        }
+        if changed {
+            policy.version = Some(3);
+            iam.set_service_account_iam_policy(email.clone(), policy)
                 .await
                 .context(ErrorData::CloudPlatformError {
-                    message: "Failed to read the preview signer's IAM policy".to_string(),
+                    message: "Failed to update who may sign as the preview signer".to_string(),
                     resource_id: Some(sandbox.id.clone()),
                 })?;
-            // Remember old and new until the write lands, so a failure part-way still lets
-            // teardown (or the next run) remove what was bound.
-            let mut remembered = record.sign_members.clone();
-            for member in &wanted {
-                if !remembered.contains(member) {
-                    remembered.push(member.clone());
-                }
-            }
-            record.sign_members = remembered;
-            let mut changed = false;
-            for member in &wanted {
-                changed |= bind_member(&mut policy, &role_name, member);
-            }
-            for member in &dropped {
-                changed |= unbind_member(&mut policy, &role_name, member);
-            }
-            if changed {
-                policy.version = Some(3);
-                iam.set_service_account_iam_policy(email.clone(), policy)
-                    .await
-                    .context(ErrorData::CloudPlatformError {
-                        message: "Failed to update who may sign as the preview signer".to_string(),
-                        resource_id: Some(sandbox.id.clone()),
-                    })?;
-            }
-            record.sign_members = wanted;
         }
-        signer_email = Some(email);
+        record.sign_members = wanted;
     }
+    signer_email = Some(email);
 
     // Remote caller: the engine grant of the stack's Remote Bindings identity.
     if let Some(entry) = ctx.desired_stack.resources.get(&sandbox.id) {

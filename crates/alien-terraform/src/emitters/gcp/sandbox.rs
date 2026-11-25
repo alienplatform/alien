@@ -548,11 +548,14 @@ const SIGN_JWT_PERMISSION: &str = "iam.serviceAccounts.signJwt";
 /// sandbox: the role is project-wide and its id is fixed.
 const PREVIEW_SIGN_ROLE_LABEL: &str = "gcp_role_sandbox_preview_sign";
 
-/// Whether setup creates the edge-signing identity: only where the sandbox needs one (preview
-/// ports, or an `internet` sandbox's private ingress) and the deployment owns the engine, so a
-/// sandbox with neither adds nothing to an existing plan.
+/// Whether the generated package creates the edge-signing identity: only for a sandbox with
+/// preview ports or `internet` egress, on a deployment that owns the engine. Its signing role is a
+/// project custom role; an install that manages its roles outside the module (`gcp_manage_custom_roles
+/// = false`) has no such role for a sandbox that had no signer before, and the next apply would
+/// fail on the binding. Interactive-only sandboxes get their signer from direct setup instead.
 fn has_preview_signer(ctx: &EmitContext<'_>, sandbox: &Sandbox) -> bool {
-    sandbox.needs_gcp_edge_signer() && ctx.resource.lifecycle == ResourceLifecycle::Frozen
+    (!sandbox.preview_ports.is_empty() || sandbox.egress == SandboxEgress::Internet)
+        && ctx.resource.lifecycle == ResourceLifecycle::Frozen
 }
 
 /// Creates the per-deployment identity the GCP edge accepts a signed JWT from, and lets the
@@ -797,6 +800,20 @@ mod tests {
                 .unwrap_or_else(|| panic!("the block carries no '{key}': {block:?}"))
         }
 
+        /// Engine grants that are not the edge signer's. Every sandbox now has a signer, which
+        /// holds the execute verb on the engine, so "no engine grant" means no other member.
+        fn engine_grants_besides_the_signer(fragment: &TfFragment) -> Vec<&hcl::structure::Block> {
+            fragment
+                .resource_blocks
+                .iter()
+                .filter(|block| {
+                    block.labels.first().map(|l| l.as_str())
+                        == Some("google_vertex_ai_reasoning_engine_iam_member")
+                })
+                .filter(|block| !attribute(block, "member").contains("_preview"))
+                .collect()
+        }
+
         /// The grant names the engine by reading the created block's server-assigned `name` — a
         /// name derived from the setup label would be a scope no engine answers to, so the caller
         /// would hold no session access at all while `PERMISSIONS.md` still advertised the grant.
@@ -840,10 +857,7 @@ mod tests {
                 GcpAgentPlatformSandboxEmitter.emit(ctx).expect("renders")
             });
             assert!(
-                !fragment.resource_blocks.iter().any(|block| {
-                    block.labels.first().map(|l| l.as_str())
-                        == Some("google_vertex_ai_reasoning_engine_iam_member")
-                }),
+                engine_grants_besides_the_signer(&fragment).is_empty(),
                 "{fragment:?}"
             );
         }
@@ -1110,19 +1124,9 @@ mod tests {
                 }));
 
             let fragment = granted(true, false);
-            let members: Vec<_> = fragment
-                .resource_blocks
-                .iter()
-                .filter(|block| {
-                    block.labels.first().map(|label| label.as_str())
-                        == Some("google_vertex_ai_reasoning_engine_iam_member")
-                })
-                .collect();
+            let members = engine_grants_besides_the_signer(&fragment);
             assert_eq!(members.len(), 1, "{fragment:?}");
-            assert!(!granted(false, false).resource_blocks.iter().any(|block| {
-                block.labels.first().map(|l| l.as_str())
-                    == Some("google_vertex_ai_reasoning_engine_iam_member")
-            }));
+            assert!(engine_grants_besides_the_signer(&granted(false, false)).is_empty());
 
             // On a protected install the verifier creates the template, so it reads the image
             // repository too: one reader member on that repository, none without a verifier.
@@ -1236,11 +1240,13 @@ mod tests {
                     .collect()
             };
 
+            // No preview ports and no internet egress: the package adds nothing to an existing
+            // plan (the signer's role is a project custom role an install that manages its roles
+            // itself may not have). Direct setup creates the signer for such a sandbox.
             let (none, binding, none_import) = render(vec![], true);
-            assert_eq!(
-                kinds(&none),
-                vec!["google_artifact_registry_repository".to_string()],
-                "no preview ports, no identity, and no manager to grant: {none:?}"
+            assert!(
+                !kinds(&none).iter().any(|k| k == "google_service_account"),
+                "{none:?}"
             );
             assert!(!object_keys(&binding).contains("previewServiceAccount"));
             assert!(!object_keys(&none_import).contains("previewServiceAccount"));
@@ -1559,6 +1565,8 @@ mod tests {
                 .expect("the binding renders")
                 .expect("an Agent Platform sandbox has a binding");
             assert!(object_keys(&emitted).contains("previewServiceAccount"));
+            // A sandbox with neither preview ports nor internet egress gets no signer from the
+            // package, so an install that manages its own roles needs no new one to upgrade.
             let open = emit_binding(SandboxEgress::Allow, Some(3600))
                 .expect("the binding renders")
                 .expect("an Agent Platform sandbox has a binding");
@@ -1570,18 +1578,18 @@ mod tests {
         /// set on both sides so the key sets are comparable whole.
         #[test]
         fn emitted_binding_keys_match_the_binding_type() {
-            let emitted = emit_binding(SandboxEgress::Allow, Some(3600))
+            let emitted = emit_binding(SandboxEgress::Internet, Some(3600))
                 .expect("the binding renders")
                 .expect("an Agent Platform sandbox has a binding");
 
-            let type_json = serde_json::to_value(SandboxBinding::gcp_agent_platform(
-                "e",
-                "t",
-                "us-central1",
-                Some(3600),
-                true,
-            ))
-            .expect("the binding type serializes");
+            // An `internet` sandbox's package creates the edge signer, so the binding names it.
+            let mut binding =
+                SandboxBinding::gcp_agent_platform("e", "t", "us-central1", Some(3600), true);
+            if let SandboxBinding::GcpAgentPlatform(inner) = &mut binding {
+                inner.preview_service_account =
+                    Some("signer@p.iam.gserviceaccount.com".to_string().into());
+            }
+            let type_json = serde_json::to_value(binding).expect("the binding type serializes");
             let type_keys: BTreeSet<String> = type_json
                 .as_object()
                 .expect("the binding serializes as an object")

@@ -2498,8 +2498,10 @@ fn access_denied() -> AlienError<AgentPlatformErrorData> {
 fn capabilities_describe_the_backend_not_this_declaration() {
     let platform = SandboxCapabilities::gcp_agent_platform();
 
+    // The declaration changes nothing; only the signing identity narrows, and only interactive
+    // commands (see `interactive_commands_are_offered_only_with_the_edge_signer`).
     assert_eq!(
-        provider(MockAgentPlatformApi::new()).capabilities(),
+        preview_provider(MockAgentPlatformApi::new()).capabilities(),
         platform
     );
 
@@ -2508,7 +2510,8 @@ fn capabilities_describe_the_backend_not_this_declaration() {
         ENGINE_FULL.to_string(),
         TEMPLATE.to_string(),
         None,
-    );
+    )
+    .with_preview_signer(Arc::new(FixedSigner::new()));
     assert_eq!(
         untimed.capabilities(),
         platform,
@@ -4751,4 +4754,221 @@ async fn an_agent_that_installed_the_bundle_reports_where() {
         provider.agent_ca_path("sbx").await.unwrap().as_deref(),
         Some("/tmp/x.pem")
     );
+}
+
+// ---- Interactive commands through the edge ---------------------------------------------------
+
+/// A loopback stand-in for the sandbox edge and the agent behind it: records the headers of every
+/// request and answers the agent's interactive routes.
+mod loopback_edge {
+    use super::*;
+    use axum::{extract::State, http::HeaderMap, routing::post, Json, Router};
+    use std::sync::Mutex;
+
+    pub type Seen = Arc<Mutex<Vec<(String, HeaderMap)>>>;
+
+    async fn start(State(seen): State<Seen>, headers: HeaderMap) -> String {
+        seen.lock()
+            .unwrap()
+            .push(("/v1/interactive".into(), headers));
+        let data = BASE64.encode("hello\n");
+        format!(
+            "{{\"t\":\"stdout\",\"seq\":0,\"data\":\"{data}\"}}\n{{\"t\":\"exit\",\"code\":7}}\n"
+        )
+    }
+
+    async fn stdin(
+        State(seen): State<Seen>,
+        headers: HeaderMap,
+        Json(body): Json<serde_json::Value>,
+    ) -> Json<serde_json::Value> {
+        seen.lock()
+            .unwrap()
+            .push(("/v1/interactive/stdin".into(), headers));
+        let offset = body["offset"].as_u64().unwrap();
+        let len = BASE64.decode(body["data"].as_str().unwrap()).unwrap().len() as u64;
+        Json(json!({ "accepted": offset + len }))
+    }
+
+    /// The loopback's `address:port`, as the binding's private endpoint names it.
+    pub async fn serve() -> (String, Seen) {
+        let seen = Seen::default();
+        let app = Router::new()
+            .route("/v1/interactive", post(start))
+            .route("/v1/interactive/stdin", post(stdin))
+            .with_state(Arc::clone(&seen));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap().to_string();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (address, seen)
+    }
+}
+
+fn interactive_request() -> RunCommandRequest {
+    RunCommandRequest {
+        command: "/bin/sh".to_string(),
+        args: vec!["-c".to_string(), "cat".to_string()],
+        cwd: None,
+        env: Default::default(),
+        timeout: Duration::from_secs(600),
+    }
+}
+
+/// The capability follows the signing identity: a binding that cannot sign the edge credential
+/// says so before the call, instead of promising a stream it cannot open.
+#[test]
+fn interactive_commands_are_offered_only_with_the_edge_signer() {
+    assert!(
+        !provider(MockAgentPlatformApi::new())
+            .capabilities()
+            .interactive_commands
+    );
+    assert!(
+        preview_provider(MockAgentPlatformApi::new())
+            .capabilities()
+            .interactive_commands
+    );
+}
+
+#[tokio::test]
+async fn run_interactive_without_a_signer_is_refused_naming_setup() {
+    let error = provider(MockAgentPlatformApi::new())
+        .run_interactive("s1", interactive_request())
+        .await
+        .expect_err("no signing identity");
+    assert_eq!(error.code, "OPERATION_NOT_SUPPORTED", "{error}");
+    assert!(error.to_string().contains("setup"), "{error}");
+}
+
+/// The stream, its exit code, and the headers the edge needs: the edge credential as the bearer,
+/// the routing token and the agent's port. Input reuses one credential instead of signing per
+/// keystroke.
+#[tokio::test]
+async fn run_interactive_streams_through_the_edge_with_its_headers() {
+    let (address, seen) = loopback_edge::serve().await;
+    let mut client = MockAgentPlatformApi::new();
+    client
+        .expect_get_sandbox()
+        .returning(|_, id| Ok(running_with_route(id, &far_future())));
+    let signer = FixedSigner::new();
+    let signed = Arc::clone(&signer.signed);
+    let provider = provider(client)
+        .with_preview_signer(Arc::new(signer))
+        .with_private_endpoint(address);
+
+    let command = provider
+        .run_interactive("s1", interactive_request())
+        .await
+        .expect("the stream opens");
+    command.input.write(b"abc").await.expect("write");
+    command.input.write(b"def").await.expect("second write");
+    let output: Vec<_> = command.output.collect().await;
+
+    let mut stdout = Vec::new();
+    let mut exit = None;
+    for item in output {
+        match item.expect("frame") {
+            CommandOutput::Stdout { data, .. } => stdout.extend(data),
+            CommandOutput::Exit { code, .. } => exit = Some(code),
+            _ => {}
+        }
+    }
+    assert_eq!(stdout, b"hello\n");
+    assert_eq!(exit, Some(7));
+
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen.len(), 3, "start and two writes");
+    for (_, headers) in seen.iter() {
+        assert_eq!(headers["authorization"], "Bearer edge.jwt");
+        assert_eq!(headers["x-sandbox-routing-token"], "route-1");
+        assert_eq!(headers["x-sandbox-port"], "8971");
+    }
+    assert_eq!(
+        signed.load(Ordering::SeqCst),
+        1,
+        "one credential serves the command"
+    );
+}
+
+/// A credential about to end is signed again, so a command that outlives one keeps going.
+#[tokio::test]
+async fn run_interactive_renews_an_edge_credential_that_is_about_to_end() {
+    let (address, _seen) = loopback_edge::serve().await;
+    let mut client = MockAgentPlatformApi::new();
+    client
+        .expect_get_sandbox()
+        .returning(|_, id| Ok(running_with_route(id, &far_future())));
+    let signer = FixedSigner::living(30);
+    let signed = Arc::clone(&signer.signed);
+    let provider = provider(client)
+        .with_preview_signer(Arc::new(signer))
+        .with_private_endpoint(address);
+    let command = provider
+        .run_interactive("s1", interactive_request())
+        .await
+        .expect("the stream opens");
+    command.input.write(b"abc").await.expect("write");
+    assert_eq!(signed.load(Ordering::SeqCst), 2, "each request signs again");
+}
+
+/// The margin is 60 s: a credential with a little more than that left serves every request of
+/// the command, one with a little less is signed again for each.
+#[tokio::test]
+async fn run_interactive_reuses_an_edge_credential_just_outside_the_renewal_margin() {
+    for (lifetime, expected_signs) in [(90, 1), (50, 2)] {
+        let (address, _seen) = loopback_edge::serve().await;
+        let mut client = MockAgentPlatformApi::new();
+        client
+            .expect_get_sandbox()
+            .returning(|_, id| Ok(running_with_route(id, &far_future())));
+        let signer = FixedSigner::living(lifetime);
+        let signed = Arc::clone(&signer.signed);
+        let provider = provider(client)
+            .with_preview_signer(Arc::new(signer))
+            .with_private_endpoint(address);
+        let command = provider
+            .run_interactive("s1", interactive_request())
+            .await
+            .expect("the stream opens");
+        command.input.write(b"abc").await.expect("write");
+        assert_eq!(
+            signed.load(Ordering::SeqCst),
+            expected_signs,
+            "a credential with {lifetime}s left"
+        );
+    }
+}
+
+/// The routing token is short-lived: a command that outlives it must send the token the sandbox
+/// reports now, not the one it started with.
+#[tokio::test]
+async fn run_interactive_reads_the_routing_token_again_with_each_credential() {
+    let (address, seen) = loopback_edge::serve().await;
+    let reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let mut client = MockAgentPlatformApi::new();
+    let counter = Arc::clone(&reads);
+    client.expect_get_sandbox().returning(move |_, id| {
+        let n = counter.fetch_add(1, Ordering::SeqCst);
+        let mut sandbox = running_with_route(id, &far_future());
+        if let Some(info) = sandbox.connection_info.as_mut() {
+            info.routing_token = Some(format!("route-{n}"));
+        }
+        Ok(sandbox)
+    });
+    // Every credential is already inside the renewal margin, so every request signs and reads.
+    let provider = provider(client)
+        .with_preview_signer(Arc::new(FixedSigner::living(30)))
+        .with_private_endpoint(address);
+    let command = provider
+        .run_interactive("s1", interactive_request())
+        .await
+        .expect("the stream opens");
+    command.input.write(b"abc").await.expect("write");
+    let seen = seen.lock().unwrap();
+    let tokens: Vec<_> = seen
+        .iter()
+        .map(|(_, h)| h["x-sandbox-routing-token"].to_str().unwrap().to_string())
+        .collect();
+    assert_eq!(tokens.len(), 2);
+    assert_ne!(tokens[0], tokens[1], "the write carries a fresh token");
 }
