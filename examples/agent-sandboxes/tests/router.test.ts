@@ -35,16 +35,17 @@ function fakeDataPlane(options: { pauseResume: boolean; pauseMs?: number; execMs
     async turn(input) {
       calls.push(`turn ${input.sandboxId} ${input.sessionId ?? "-"}`)
       // A turn that is still running has not produced its end yet.
-      if (running) return
+      if (running) return { turnId: "turn-1" }
       if (override) {
         events = override
-        return
+        return { turnId: "turn-1" }
       }
       events = [
         { seq: 1, kind: "agent", event: { type: "system", subtype: "init", session_id: "sess-1" } },
         { seq: 2, kind: "agent", event: { type: "result" } },
         { seq: 3, kind: "turn-end", exitCode: 0 },
       ]
+      return { turnId: "turn-1" }
     },
     async events(_threadId, after) {
       await new Promise(r => setTimeout(r, 1))
@@ -58,8 +59,8 @@ function fakeDataPlane(options: { pauseResume: boolean; pauseMs?: number; execMs
     async endTurn(threadId, sandboxId) {
       calls.push(`end-turn ${threadId} ${sandboxId}`)
     },
-    async stopTurn(threadId) {
-      calls.push(`stop-turn ${threadId}`)
+    async stopTurn(threadId, turnId) {
+      calls.push(`stop-turn ${threadId} ${turnId}`)
       running = false
       return { stopped: true, running }
     },
@@ -246,6 +247,29 @@ describe("thread router", () => {
     expect(store.get(thread.id)?.owner).toBe("bob")
   })
 
+  it("a thread saved without an owner takes the previous user as owner, so a failed first sweep is retried", async () => {
+    const { dp, calls } = fakeDataPlane({ pauseResume: true })
+    const store = new ThreadStore()
+    const router = new ThreadRouter(dp, store, { idlePauseMs: 60_000, pollMs: 1 })
+    const thread = router.create("Orders", "alice")
+    await router.send(thread.id, "alice", "one")
+    await until(() => store.get(thread.id)?.state === "idle")
+    store.update(thread.id, { owner: undefined })
+
+    dp.endProcesses = async () => {
+      throw new Error("1 process still running after the sweep")
+    }
+    await expect(router.send(thread.id, "bob", "two")).rejects.toThrow("still running")
+    expect(store.get(thread.id)?.owner).toBe("alice")
+
+    dp.endProcesses = async sandboxId => {
+      calls.push(`end-processes ${sandboxId}`)
+      return { ended: 1 }
+    }
+    await router.send(thread.id, "bob", "two again")
+    expect(calls).toContain("end-processes sbx-1")
+  })
+
   it("a user switch waits for a running exec and sweeps after it", async () => {
     const { dp, calls } = fakeDataPlane({ pauseResume: true, execMs: 40 })
     const store = new ThreadStore()
@@ -322,7 +346,7 @@ describe("thread router", () => {
     const thread = router.create("Orders", "alice")
     await router.send(thread.id, "alice", "hello")
     await until(() => store.get(thread.id)?.state === "idle")
-    expect(calls).toContain(`stop-turn ${thread.id}`)
+    expect(calls).toContain(`stop-turn ${thread.id} turn-1`)
     expect(calls).toContain(`end-turn ${thread.id} sbx-1`)
   })
 

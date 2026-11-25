@@ -105,7 +105,9 @@ export class ThreadRouter {
       const owner = thread.owner ?? thread.user
       if (thread.user !== user)
         this.emit(threadId, { type: "notice", text: `user switched to ${user}` })
-      this.store.update(threadId, { user })
+      // A thread saved before `owner` existed has none: the previous user is the owner until a
+      // sweep and bind for the new user succeed, so a failed first sweep is tried again.
+      this.store.update(threadId, { user, ...(thread.owner === undefined ? { owner } : {}) })
       this.emit(threadId, { type: "user", user, text })
       this.setState(threadId, "running")
       try {
@@ -126,7 +128,13 @@ export class ThreadRouter {
         await bindTurn(this.dp, { threadId, sandboxId }, user)
         this.emit(threadId, { type: "notice", text: `sandbox bound to ${user}` })
         this.store.update(threadId, { owner: user })
-        await this.dp.turn({ threadId, sandboxId, sessionId: thread.sessionId, text })
+        const started = await this.dp.turn({
+          threadId,
+          sandboxId,
+          sessionId: thread.sessionId,
+          text,
+        })
+        this.store.update(threadId, { turnId: started.turnId })
       } catch (error) {
         this.emit(threadId, { type: "notice", text: `turn failed to start: ${message(error)}` })
         await this.finish(threadId)
@@ -188,7 +196,9 @@ export class ThreadRouter {
         failures += 1
         if (Date.now() - failingSince >= giveUpMs) {
           try {
-            const stopped = await this.dp.stopTurn(threadId)
+            const turnId = this.store.get(threadId)?.turnId
+            if (!turnId) throw new Error("the running turn's id is not known")
+            const stopped = await this.dp.stopTurn(threadId, turnId)
             if (!stopped.running) {
               this.emit(threadId, {
                 type: "notice",
@@ -232,6 +242,8 @@ export class ThreadRouter {
           this.emit(threadId, { type: "agent", event: event.event as Record<string, unknown> })
         else if (event.kind === "stderr")
           this.emit(threadId, { type: "stderr", text: String(event.text) })
+        else if (event.kind === "turn-start")
+          this.store.update(threadId, { turnId: String(event.turnId) })
         else if (event.kind === "turn-end") {
           ended = true
           if (event.error)

@@ -2,9 +2,12 @@
 //
 // Nothing of the previous user needs to survive a user switch: every turn starts its own agent
 // process and Claude Code keeps its conversation on disk. So the switch ends every process in
-// the sandbox except the sandbox's own: PID 1, the processes that started the sweep itself, and
-// kernel threads (no command line). The sweep does not look at anything the agent controls,
-// such as environment variables or process names.
+// the sandbox that belongs to the sandbox user: the user the sweep itself runs as. Processes of
+// other users (the runtime's own, which the sandbox starts as root) are not the agent's and stay,
+// as do PID 1, the processes that started the sweep itself, and kernel threads (no command
+// line). The owner comes from the kernel (the Uid line of /proc/<pid>/status), which the agent
+// cannot change; the sweep does not look at anything else the agent controls, such as
+// environment variables or process names.
 //
 // `sweep` ends them and prints the pids. `list` prints what is left (and nothing when the
 // sandbox is clean); the runner lists again after a sweep and refuses to go on if anything is
@@ -16,6 +19,8 @@
 export const SWEEP_SCRIPT = String.raw`
 mode="$1"
 self=$$
+me=$(sed -n 's/^Uid:[[:space:]]*\([0-9]*\).*/\1/p' /proc/$$/status)
+[ -n "$me" ] || { echo "cannot read the sweep's own uid" >&2; exit 1; }
 ppid_of() { sed -n 's/^PPid:[[:space:]]*//p' "/proc/$1/status" 2>/dev/null; }
 
 # This script and the processes that started it stay.
@@ -33,6 +38,8 @@ candidates() {
     [ "$pid" = 1 ] && continue
     case "$keep" in *" $pid "*) continue ;; esac
     [ -n "$(tr -d '\000' < "$d/cmdline" 2>/dev/null)" ] || continue
+    # Only the sandbox user's processes (the real uid, set by the kernel).
+    [ "$(sed -n 's/^Uid:[[:space:]]*\([0-9]*\).*/\1/p' "$d/status" 2>/dev/null)" = "$me" ] || continue
     # Things this script started itself (ls, tr, sed) are not the sandbox's.
     p=$pid
     ours=

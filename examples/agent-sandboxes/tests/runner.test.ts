@@ -5,6 +5,7 @@ import {
   LineSplitter,
   pauseWhenIdle,
   startTurn,
+  stopTurn,
   ThreadEvents,
 } from "../data-plane/runner/src/turns"
 
@@ -24,7 +25,7 @@ describe("a thread's lock in the runner", () => {
       },
     )
     await wait(5)
-    const turn = startTurn(t, () => order.push("turn start"))
+    const turn = startTurn(t, "turn-x", () => order.push("turn start"))
     await Promise.all([pausing, turn])
     expect(order).toEqual(["pause start", "pause end", "turn start"])
     expect(t.running).toBe(true)
@@ -33,7 +34,7 @@ describe("a thread's lock in the runner", () => {
   it("a turn claimed between the capability check and the pause stops the pause", async () => {
     const t = new ThreadEvents()
     let paused = false
-    const turn = startTurn(t, () => {})
+    const turn = startTurn(t, "turn-x", () => {})
     const pausing = pauseWhenIdle(
       t,
       async () => true,
@@ -48,8 +49,26 @@ describe("a thread's lock in the runner", () => {
 
   it("refuses a second turn while one runs", async () => {
     const t = new ThreadEvents()
-    await startTurn(t, () => {})
-    await expect(startTurn(t, () => {})).rejects.toThrow("already running")
+    await startTurn(t, "turn-x", () => {})
+    await expect(startTurn(t, "turn-x", () => {})).rejects.toThrow("already running")
+  })
+
+  it("a stop that names another turn leaves the running turn alone", async () => {
+    const t = new ThreadEvents()
+    let killed = 0
+    await startTurn(t, "turn-2", () => {})
+    t.stop = async () => {
+      killed += 1
+    }
+    expect(await stopTurn(t, "turn-1")).toEqual({ stopped: false, running: false })
+    expect(killed).toBe(0)
+    expect((await stopTurn(t, "turn-2")).stopped).toBe(true)
+    expect(killed).toBe(1)
+  })
+
+  it("a stop after the turn ended does nothing", async () => {
+    const t = new ThreadEvents()
+    expect(await stopTurn(t, "turn-1")).toEqual({ stopped: false, running: false })
   })
 
   it("a platform without pause reports it and pauses nothing", async () => {
@@ -109,6 +128,43 @@ describe("ending what a thread left running", () => {
       expect(result.stdout).not.toContain("before: 0")
     },
   )
+})
+
+describe("the sweep and process owners", () => {
+  // The runtime starts its own helpers as root; the sweep runs as the sandbox user and may only
+  // end that user's processes. Needs root to make both kinds, so it is skipped without it.
+  const root = spawnSync("sudo", ["-n", "unshare", "--pid", "--fork", "--mount-proc", "true"])
+  it.skipIf(root.status !== 0)("leaves processes of another user alone", () => {
+    const result = spawnSync(
+      "sudo",
+      [
+        "-n",
+        "env",
+        `SWEEP=${SWEEP_SCRIPT}`,
+        "unshare",
+        "--pid",
+        "--fork",
+        "--mount-proc",
+        "sh",
+        "-c",
+        [
+          "sleep 400 &",
+          "setpriv --reuid=65534 --regid=65534 --clear-groups sleep 401 &",
+          "sleep 0.3",
+          'setpriv --reuid=65534 --regid=65534 --clear-groups sh -c "$SWEEP" sweep sweep > /tmp/ended.$$; echo "ended: $(wc -l < /tmp/ended.$$)"',
+          'setpriv --reuid=65534 --regid=65534 --clear-groups sh -c "$SWEEP" sweep list > /tmp/left.$$; echo "left: $(wc -l < /tmp/left.$$)"',
+          "rm -f /tmp/ended.$$ /tmp/left.$$",
+          // the root-owned sleep is still there
+          'for p in /proc/[0-9]*; do tr "\\0" " " < $p/cmdline; echo; done | grep -c "^sleep 400" | sed "s/^/root sleep alive: /"',
+        ].join("\n"),
+        "outer",
+      ],
+      { encoding: "utf8", env: { PATH: process.env.PATH, SWEEP: SWEEP_SCRIPT } },
+    )
+    expect(result.stdout).toContain("ended: 1")
+    expect(result.stdout).toContain("left: 0")
+    expect(result.stdout).toContain("root sleep alive: 1")
+  })
 })
 
 describe("reading the agent's output", () => {

@@ -13,6 +13,8 @@ export interface Thread {
    * the sandbox was swept and bound for them, so a failed switch is swept again on the retry.
    */
   owner?: string
+  /** The turn that is running (or last ran): stops name it. */
+  turnId?: string
   /** The last runner event this control plane has read, and the runner run it belongs to. */
   cursor?: number
   generation?: string

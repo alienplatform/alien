@@ -32,6 +32,8 @@ export class ThreadEvents {
   /** Serializes everything that changes the thread's sandbox: open, resume, turn start, pause. */
   readonly lock = new Mutex()
   running = false
+  /** The running turn's id; stops name the turn they mean. */
+  turnId: string | undefined
   sessionId: string | undefined
   /** The running turn's process, so it can be stopped. */
   stop: (() => Promise<void>) | undefined
@@ -90,12 +92,26 @@ export class LineSplitter {
 }
 
 /** Starts a turn unless one is running. `start` runs inside the thread's lock, so a pause cannot interleave. */
-export function startTurn(t: ThreadEvents, start: () => void): Promise<void> {
+export function startTurn(t: ThreadEvents, turnId: string, start: () => void): Promise<void> {
   return t.lock.run(() => {
     if (t.running) throw new Error("a turn is already running in this thread")
     t.running = true
+    t.turnId = turnId
     start()
   })
+}
+
+/**
+ * Stops the turn the caller means. A stop that names another turn (a late stop for a turn that
+ * already ended, while a newer one runs) does nothing and reports that turn as not running.
+ */
+export async function stopTurn(
+  t: ThreadEvents,
+  turnId: string,
+): Promise<{ stopped: boolean; running: boolean }> {
+  if (!t.running || t.turnId !== turnId) return { stopped: false, running: false }
+  if (t.stop) await t.stop()
+  return { stopped: true, running: t.running && t.turnId === turnId }
 }
 
 /**

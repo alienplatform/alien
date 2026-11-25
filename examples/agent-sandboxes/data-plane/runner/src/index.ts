@@ -4,8 +4,8 @@
 //   open       { threadId, sandboxId? }             create the thread's sandbox, or resume it
 //   bind-turn  { sandboxId, token }                 install the turn token on the connector link
 //   unbind-turn { sandboxId }                       remove every credential rule from the sandbox
-//   end-processes { sandboxId }                     end every process the sandbox itself did not start
-//   stop-turn  { threadId }                         kill the running turn's agent process
+//   end-processes { sandboxId }                     end every process of the sandbox user
+//   stop-turn  { threadId, turnId }                 kill that turn if it is the running one's agent process
 //   turn       { threadId, sandboxId, sessionId?, text }   start one agent turn
 //   events     { threadId, after, waitMs? }         long-poll the turn's events
 //   exec       { sandboxId, command }              run a shell command in the sandbox
@@ -25,7 +25,7 @@ import { StringDecoder } from "node:string_decoder"
 import { sandbox } from "@alienplatform/bindings"
 import { createCommandReceiver } from "@alienplatform/commands"
 import { SWEEP_SCRIPT } from "./processes"
-import { LineSplitter, pauseWhenIdle, startTurn, ThreadEvents } from "./turns"
+import { LineSplitter, pauseWhenIdle, startTurn, stopTurn, ThreadEvents } from "./turns"
 
 const agent = sandbox("agent")
 const MODEL = process.env.MODEL ?? "claude-sonnet-4-6"
@@ -116,11 +116,11 @@ async function agentEnv(): Promise<Record<string, string>> {
 
 async function runTurn(
   t: ThreadEvents,
+  turnId: string,
   sandboxId: string,
   sessionId: string | undefined,
   text: string,
 ) {
-  const turnId = randomUUID()
   t.push({ kind: "turn-start", turnId })
   const args = [
     "-p",
@@ -193,6 +193,7 @@ async function runTurn(
     }
     t.stop = undefined
     t.running = false
+    t.turnId = undefined
     t.push({ kind: "turn-end", turnId, exitCode, ...(error ? { error } : {}) })
   }
 }
@@ -276,9 +277,8 @@ receiver.command("end-processes", async input => {
 })
 
 receiver.command("stop-turn", async input => {
-  const t = thread(str(obj(input), "threadId"))
-  if (t.running && t.stop) await t.stop()
-  return { stopped: true, running: t.running }
+  const i = obj(input)
+  return stopTurn(thread(str(i, "threadId")), str(i, "turnId"))
 })
 
 receiver.command("turn", async input => {
@@ -289,8 +289,9 @@ receiver.command("turn", async input => {
   const t = thread(threadId)
   // The router's store survives a runner restart; this process's memory may not.
   const sessionId = optStr(i, "sessionId") ?? t.sessionId
-  await startTurn(t, () => void runTurn(t, sandboxId, sessionId, text))
-  return { started: true }
+  const turnId = randomUUID()
+  await startTurn(t, turnId, () => void runTurn(t, turnId, sandboxId, sessionId, text))
+  return { started: true, turnId }
 })
 
 receiver.command("events", async input => {

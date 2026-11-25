@@ -36,14 +36,17 @@ export interface DataPlane {
     sandboxId: string
     sessionId?: string
     text: string
-  }): Promise<void>
+  }): Promise<{ turnId: string }>
   events(threadId: string, after: number, waitMs: number): Promise<EventsResult>
   /** Ends the turn's access: the connector forgets the thread's token and the sandbox's rules are removed. */
   endTurn(threadId: string, sandboxId: string): Promise<void>
-  /** Kills the running turn's agent process; rejects if the runner cannot be reached. */
-  stopTurn(threadId: string): Promise<{ stopped: boolean; running: boolean }>
   /**
-   * Ends every process in the sandbox that is not the sandbox's own, then lists again. Rejects
+   * Kills the agent process of the named turn; a stop for a turn that is not the running one does
+   * nothing. Rejects if the runner cannot be reached.
+   */
+  stopTurn(threadId: string, turnId: string): Promise<{ stopped: boolean; running: boolean }>
+  /**
+   * Ends every process of the sandbox user (the other users' are the runtime's), then lists again. Rejects
    * if anything is left or the listing fails.
    */
   endProcesses(sandboxId: string): Promise<{ ended: number }>
@@ -73,9 +76,7 @@ export function commandsDataPlane(config: {
     open: (threadId, sandboxId) => runner.invoke<OpenResult>("open", { threadId, sandboxId }),
     issueToken: (threadId, user) => connector.invoke("issue-token", { threadId, user }),
     bindTurn: (sandboxId, token) => runner.invoke("bind-turn", { sandboxId, token }),
-    turn: async input => {
-      await runner.invoke("turn", input)
-    },
+    turn: input => runner.invoke<{ turnId: string }>("turn", input),
     events: (threadId, after, waitMs) =>
       runner.invoke<EventsResult>("events", { threadId, after, waitMs }),
     endTurn: async (threadId, sandboxId) => {
@@ -84,7 +85,7 @@ export function commandsDataPlane(config: {
         runner.invoke("unbind-turn", { sandboxId }),
       ])
     },
-    stopTurn: threadId => runner.invoke("stop-turn", { threadId }),
+    stopTurn: (threadId, turnId) => runner.invoke("stop-turn", { threadId, turnId }),
     endProcesses: sandboxId => runner.invoke("end-processes", { sandboxId }),
     exec: (sandboxId, command) => runner.invoke("exec", { sandboxId, command }),
     pause: (threadId, sandboxId) => runner.invoke("pause", { threadId, sandboxId }),
