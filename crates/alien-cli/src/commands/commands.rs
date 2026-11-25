@@ -1,9 +1,11 @@
-//! CLI commands for invoking remote commands on deployments.
+//! CLI commands for invoking remote commands on deployments and reading their history.
 //!
 //! Two entry points:
 //! - `alien dev commands invoke` — invokes against the local dev server
 //! - `alien commands invoke` — invokes against the standalone/platform manager
 
+#[cfg(feature = "platform")]
+use crate::commands::command_records::{self, StatusArg};
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
 use alien_commands_client::{CommandError, CommandsClient, CommandsClientConfig, InvokeOptions};
@@ -34,6 +36,15 @@ EXAMPLES:
 
     # Pick the resource when more than one handles commands
     alien commands invoke --deployment acme-corp --command status --target alerts
+
+    # What failed in the last day, and why
+    alien commands ls --status failed --since 24h
+
+    # One command in detail
+    alien commands get cmd_...
+
+    # Failure rate and latency per command name over a week
+    alien commands stats --since 7d
 
 Commands are application RPC handled by your Worker, Container, or Daemon.
 See also: `alien operations --help` for Remote Operator operations, which carry
@@ -70,11 +81,121 @@ pub enum CommandsAction {
         #[arg(long, default_value = "60")]
         timeout: u64,
     },
+
+    #[cfg(feature = "platform")]
+    /// List commands, newest first (platform)
+    Ls {
+        /// Only commands of this deployment: ID, or <deployment-group-name>/<deployment-name>
+        #[arg(long)]
+        deployment: Option<String>,
+
+        /// Only commands with this name
+        #[arg(long)]
+        name: Option<String>,
+
+        /// Only commands in this state
+        #[arg(long, value_enum)]
+        status: Option<StatusArg>,
+
+        /// Only commands created within this window, such as 30m, 24h or 7d
+        #[arg(long, value_parser = crate::commands::logs::parse_duration_arg)]
+        since: Option<chrono::Duration>,
+
+        /// Maximum number of commands to list
+        #[arg(long, default_value = "50", value_parser = clap::value_parser!(u64).range(1..))]
+        limit: u64,
+
+        /// Print JSON instead of a table
+        #[arg(long)]
+        json: bool,
+    },
+
+    #[cfg(feature = "platform")]
+    /// Show one command: status, timings, target, error and response size (platform)
+    Get {
+        /// Command ID
+        id: String,
+
+        /// Print JSON instead of text
+        #[arg(long)]
+        json: bool,
+    },
+
+    #[cfg(feature = "platform")]
+    /// Summarize commands per name: outcomes, p50/p95 duration, top errors (platform)
+    Stats {
+        /// Only commands of this deployment: ID, or <deployment-group-name>/<deployment-name>
+        #[arg(long)]
+        deployment: Option<String>,
+
+        /// Window to summarize, such as 24h or 7d
+        #[arg(long, default_value = "7d", value_parser = crate::commands::logs::parse_duration_arg)]
+        since: chrono::Duration,
+
+        /// Print JSON instead of a table
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+impl CommandsArgs {
+    pub fn wants_json_output(&self) -> bool {
+        #[cfg(feature = "platform")]
+        if matches!(
+            self.action,
+            CommandsAction::Ls { json: true, .. }
+                | CommandsAction::Get { json: true, .. }
+                | CommandsAction::Stats { json: true, .. }
+        ) {
+            return true;
+        }
+        false
+    }
 }
 
 /// Execute commands task — works in all execution modes.
 pub async fn commands_task(args: CommandsArgs, ctx: ExecutionMode) -> Result<()> {
     match args.action {
+        #[cfg(feature = "platform")]
+        CommandsAction::Ls {
+            deployment,
+            name,
+            status,
+            since,
+            limit,
+            json,
+        } => {
+            command_records::list_task(
+                &ctx,
+                command_records::ListOptions {
+                    deployment,
+                    name,
+                    status,
+                    since,
+                    limit,
+                    json,
+                },
+            )
+            .await
+        }
+        #[cfg(feature = "platform")]
+        CommandsAction::Get { id, json } => command_records::get_task(&ctx, &id, json).await,
+        #[cfg(feature = "platform")]
+        CommandsAction::Stats {
+            deployment,
+            since,
+            json,
+        } => {
+            command_records::stats_task(
+                &ctx,
+                command_records::StatsOptions {
+                    deployment,
+                    since,
+                    json,
+                },
+            )
+            .await
+        }
         CommandsAction::Invoke {
             deployment,
             command,
