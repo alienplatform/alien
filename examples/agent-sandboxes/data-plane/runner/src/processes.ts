@@ -9,6 +9,7 @@
 //    itself or be re-parented in between, and no command line, name or environment is read.
 //    It may end the command's own wrapper too, so the command's exit status means nothing.
 // 2. VERIFY_SCRIPT, a new command, lists every process of that user except its own ancestors
+//    and its own command's wrapper with whatever runs below it (the runtime's watchdog)
 //    (zombies, which hold nothing, are skipped). It exits 1 and prints the pids if any is left,
 //    and exits 2 if anything cannot be read. The turn starts only when it exits 0.
 //
@@ -27,8 +28,8 @@ me=$(sed -n 's/^Uid:[[:space:]]*\([0-9]*\).*/\1/p' /proc/$$/status)
 kill -9 -1
 `
 
-// Shell builtins only: no process of its own is started, so there is nothing of the verify's
-// own to tell apart from a leftover.
+// Shell builtins only (apart from reading a value through $(...), which is a subshell that has
+// ended before the listing starts): no process of its own beside its command's wrapper.
 // (A plain template, not String.raw: `\${` is how the shell's own `${` is written in it.)
 export const VERIFY_SCRIPT = `
 proc="\${PROC_DIR:-/proc}"
@@ -55,6 +56,28 @@ while [ -n "$p" ] && [ "$p" != 0 ]; do
   p=$(ppid_of /proc/$p/status) || { echo "cannot read the parent of $p" >&2; exit 2; }
 done
 
+# The runtime runs every command inside a wrapper of its own, as the sandbox user, with a
+# watchdog beside the command. That wrapper is the topmost ancestor that runs as the sandbox user
+# (below PID 1), and it and everything below it belongs to this very command. Nothing of an
+# earlier turn can be below it: the sweep ended all of them, and a process that was started
+# before the sweep is not a child of a wrapper that did not exist yet.
+top=$$
+p=$(ppid_of /proc/$$/status)
+while [ -n "$p" ] && [ "$p" != 0 ] && [ "$p" != 1 ]; do
+  u=$(uid_of /proc/$p/status) || break
+  [ "$u" = "$me" ] || break
+  top=$p
+  p=$(ppid_of /proc/$p/status) || break
+done
+below_top() { # is $1 the wrapper or below it?
+  q=$1
+  while [ -n "$q" ] && [ "$q" != 0 ] && [ "$q" != 1 ]; do
+    [ "$q" = "$top" ] && return 0
+    q=$(ppid_of "$proc/$q/status") || return 1
+  done
+  return 1
+}
+
 left=
 bad=
 for d in "$proc"/[0-9]*; do
@@ -74,6 +97,7 @@ for d in "$proc"/[0-9]*; do
   rest=\${line##*) }
   state=\${rest%% *}
   [ "$state" = Z ] && continue
+  below_top "$pid" && continue
   left="$left $pid"
 done
 if [ -n "$bad" ]; then echo "cannot read:$bad" >&2; exit 2; fi

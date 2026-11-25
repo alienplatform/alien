@@ -142,6 +142,22 @@ describe("ending what a thread left running", () => {
   })
 })
 
+describe("the verify and its own command's wrapper", () => {
+  const ok = canNamespace("--map-user=1000")
+  // The runtime wraps every command in a shell with a watchdog (a subshell and its sleep) beside
+  // the command: those are not leftovers. A process outside that wrapper is.
+  it.skipIf(!ok)(
+    "does not count the wrapper's watchdog, (a process outside it is counted: see above)",
+    () => {
+      const result = inNamespace(
+        "--map-user=1000",
+        `sh -c '( sleep 31 & wait ) & sh -c "$VERIFY" verify; echo "only-wrapper: $?"; kill $(jobs -p) 2>/dev/null'`,
+      )
+      expect(result.stdout).toContain("only-wrapper: 0")
+    },
+  )
+})
+
 describe("the verify's reading of /proc", () => {
   const uid = process.getuid?.() ?? 1000
   const fake = (entries: Record<string, { status?: string; stat?: string }>) => {
