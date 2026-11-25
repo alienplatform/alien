@@ -426,13 +426,8 @@ fn start_from_with_env(
     let passwd = fs::read_to_string("/etc/passwd")
         .into_alien_error()
         .context(failed())?;
-    let home = passwd
-        .lines()
-        .find_map(|line| {
-            let fields: Vec<_> = line.split(':').collect();
-            (fields.len() >= 6 && fields[2].parse::<u32>() == Ok(image_identity.uid))
-                .then(|| fields[5])
-        })
+    let home = alien_core::sandbox_identity::passwd_account(&passwd, image_identity.uid)
+        .map(|(_, home)| home)
         .filter(|home| !home.is_empty())
         .unwrap_or("/");
     let mut hostname = [0u8; 256];

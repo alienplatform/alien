@@ -115,8 +115,24 @@ async fn session_round_trips_and_runs_unprivileged() {
     );
 }
 
+/// Removes the images a test built, also when the test fails.
+struct RemoveImages(Vec<String>);
+
+impl Drop for RemoveImages {
+    fn drop(&mut self) {
+        let removed = std::process::Command::new("docker")
+            .args(["rmi", "-f"])
+            .args(&self.0)
+            .output();
+        if !removed.as_ref().is_ok_and(|output| output.status.success()) {
+            eprintln!("could not remove test images {:?}: {removed:?}", self.0);
+        }
+    }
+}
+
 /// Docker's exec gives a command `HOME` from passwd but no `USER`. The session supplies `USER`,
-/// the name of the account its commands run as, and a `USER` the session was created with wins.
+/// the name of the account its commands run as, unless the image's environment sets a non-empty
+/// `USER`; a `USER` the session was created with wins over both.
 #[tokio::test]
 #[ignore = "requires a real Docker daemon"]
 async fn a_command_gets_its_accounts_home_and_user() {
@@ -124,13 +140,57 @@ async fn a_command_gets_its_accounts_home_and_user() {
     let sandbox = "isolation-account";
     manager.reap(sandbox).await.expect("clean slate");
 
-    let mut with_user = config(SandboxEgressMode::Deny);
-    with_user
-        .env
-        .insert("USER".to_string(), "caller".to_string());
+    let tag = format!("alien-local-account-{}", uuid::Uuid::new_v4());
+    let images = RemoveImages(
+        ["user", "empty-user", "app"]
+            .map(|name| format!("{tag}:{name}"))
+            .to_vec(),
+    );
+    let image = |index: usize, dockerfile: &str| {
+        let mut build = std::process::Command::new("docker")
+            .args(["build", "-q", "-t", &images.0[index], "-"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .expect("docker build starts");
+        std::io::Write::write_all(
+            &mut build.stdin.take().unwrap(),
+            format!("FROM {IMAGE}\n{dockerfile}\n").as_bytes(),
+        )
+        .unwrap();
+        assert!(
+            build.wait().unwrap().success(),
+            "{} builds",
+            images.0[index]
+        );
+        let mut config = config(SandboxEgressMode::Deny);
+        config.image = images.0[index].clone();
+        config
+    };
+    let with_caller_user = |mut config: SandboxSessionConfig| {
+        config.env.insert("USER".to_string(), "caller".to_string());
+        config
+    };
+    let image_user = image(0, "ENV USER=builder");
     for (session_id, config, expected) in [
-        ("s1", config(SandboxEgressMode::Deny), "/|nobody"),
-        ("s2", with_user, "/|caller"),
+        ("base", config(SandboxEgressMode::Deny), "/|nobody"),
+        (
+            "caller",
+            with_caller_user(config(SandboxEgressMode::Deny)),
+            "/|caller",
+        ),
+        ("image-user", image_user.clone(), "/|builder"),
+        (
+            "image-user-and-caller",
+            with_caller_user(image_user),
+            "/|caller",
+        ),
+        ("image-empty-user", image(1, "ENV USER="), "/|nobody"),
+        (
+            "image-account",
+            image(2, "RUN adduser -D -u 1001 app\nUSER app"),
+            "/home/app|app",
+        ),
     ] {
         let session = manager
             .create_session(sandbox, session_id, &config)
@@ -141,13 +201,18 @@ async fn a_command_gets_its_accounts_home_and_user() {
                 &session.container_id,
                 &sh("printf '%s|%s' \"$HOME\" \"$USER\""),
             )
-            .await
-            .expect("exec runs");
-        manager
-            .terminate(sandbox, session_id)
-            .await
-            .expect("terminates");
-        assert_eq!(stdout(&account), expected);
+            .await;
+        let terminated = manager.terminate(sandbox, session_id).await;
+        if account.is_err() || terminated.is_err() {
+            // Reap before the images go, so no running container holds one.
+            let _ = manager.reap(sandbox).await;
+        }
+        assert_eq!(
+            stdout(&account.expect("exec runs")),
+            expected,
+            "session {session_id}"
+        );
+        terminated.expect("terminates");
     }
 }
 

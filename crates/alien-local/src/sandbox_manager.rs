@@ -371,6 +371,13 @@ impl LocalSandboxManager {
             .iter()
             .map(|(key, value)| format!("{key}={value}"))
             .collect();
+        if let Some(user) = image
+            .user_variable
+            .as_ref()
+            .filter(|_| !config.env.contains_key("USER"))
+        {
+            env.push(format!("USER={user}"));
+        }
         env.extend([
             format!("ALIEN_SANDBOX_EXEC_UID={}", image.identity.uid),
             format!("ALIEN_SANDBOX_EXEC_GID={}", image.identity.gid),

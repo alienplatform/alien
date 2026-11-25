@@ -2,7 +2,7 @@
 
 use std::{collections::HashMap, io::Read};
 
-use alien_core::sandbox_identity::{ExecIdentity, ImageUser};
+use alien_core::sandbox_identity::{passwd_account, usable_account_value, ExecIdentity, ImageUser};
 use alien_error::{AlienError, Context, IntoAlienError};
 use bollard::{
     models::ContainerCreateBody,
@@ -20,9 +20,22 @@ use crate::error::{ErrorData, Result};
 pub(crate) struct SandboxImage {
     pub id: String,
     pub identity: ExecIdentity,
+    /// `USER` for the session's commands: the name of the account they run as, unless the
+    /// image's environment sets a usable `USER`. Docker's exec sets `HOME` from passwd but never
+    /// `USER`.
+    pub user_variable: Option<String>,
 }
 
 const LABEL_INSPECTION: &str = "dev.alien.sandbox.inspection";
+
+/// Whether the image's environment sets a usable `USER`. Its last `USER` entry decides, as Docker
+/// keeps the last of a repeated name.
+fn image_env_sets_user(env: &[String]) -> bool {
+    env.iter()
+        .rev()
+        .find_map(|variable| variable.strip_prefix("USER="))
+        .is_some_and(usable_account_value)
+}
 
 pub(crate) async fn inspect(docker: &Docker, image: &str, sandbox: &str) -> Result<SandboxImage> {
     let docker = docker.clone();
@@ -51,10 +64,9 @@ async fn inspect_and_remove(docker: &Docker, image: &str, sandbox: &str) -> Resu
         .into_alien_error()
         .context(failed())?;
     let id = inspected.id.ok_or_else(|| AlienError::new(failed()))?;
-    let user = inspected
-        .config
-        .and_then(|config| config.user)
-        .unwrap_or_default();
+    let config = inspected.config.unwrap_or_default();
+    let user = config.user.unwrap_or_default();
+    let image_sets_user = image_env_sets_user(&config.env.unwrap_or_default());
     // Docker's archive endpoint reads files from a stopped container, including scratch images.
     // Pin its image id so tag changes cannot race identity selection.
     let container = docker
@@ -76,13 +88,18 @@ async fn inspect_and_remove(docker: &Docker, image: &str, sandbox: &str) -> Resu
     let resolved = async {
         let passwd = account_file(docker, &container.id, "/etc/passwd").await?;
         let group = account_file(docker, &container.id, "/etc/group").await?;
-        ImageUser {
+        let identity = ImageUser {
             user: &user,
             passwd: &passwd,
             group: &group,
         }
         .exec_identity(65534, None)
-        .context(failed())
+        .context(failed())?;
+        let user_variable = passwd_account(&passwd, identity.uid)
+            .map(|(name, _)| name)
+            .filter(|name| !image_sets_user && usable_account_value(name))
+            .map(str::to_string);
+        Ok((identity, user_variable))
     }
     .await;
     // Clean up even when an image has an invalid account database. No image code was started.
@@ -97,9 +114,11 @@ async fn inspect_and_remove(docker: &Docker, image: &str, sandbox: &str) -> Resu
         .await
         .into_alien_error()
         .context(failed())?;
+    let (identity, user_variable) = resolved?;
     Ok(SandboxImage {
         id,
-        identity: resolved?,
+        identity,
+        user_variable,
     })
 }
 
@@ -191,6 +210,27 @@ mod tests {
     use super::*;
     use httpmock::prelude::*;
     use std::time::Duration;
+
+    #[test]
+    fn an_image_sets_user_only_with_a_usable_last_entry() {
+        let env = |entries: &[&str]| entries.iter().map(|e| e.to_string()).collect::<Vec<_>>();
+        assert!(image_env_sets_user(&env(&["PATH=/bin", "USER=builder"])));
+        assert!(!image_env_sets_user(&env(&["PATH=/bin"])));
+        assert!(
+            !image_env_sets_user(&env(&["USER="])),
+            "an empty USER counts as unset"
+        );
+        assert!(
+            !image_env_sets_user(&env(&["USER=a\0b"])),
+            "a USER with a NUL is not used"
+        );
+        assert!(
+            !image_env_sets_user(&env(&["USER=builder", "USER="])),
+            "the last entry decides"
+        );
+        assert!(image_env_sets_user(&env(&["USER=", "USER=builder"])));
+        assert!(!image_env_sets_user(&env(&["USERNAME=builder"])));
+    }
 
     #[tokio::test]
     async fn cancelling_the_caller_still_removes_the_inspection_container() {
