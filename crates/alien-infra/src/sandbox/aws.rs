@@ -7905,8 +7905,8 @@ mod tests {
         );
         for v in &versions {
             let status = live.status_of(v).await;
-            let kept = [&old, &serving, &newest_replaced].contains(&v)
-                || (protect_paused && *v == paused);
+            let kept =
+                [&old, &serving, &newest_replaced].contains(&v) || (protect_paused && *v == paused);
             println!("{v}: {status:?}");
             assert_eq!(
                 status.as_deref(),
@@ -8050,7 +8050,10 @@ mod tests {
             .iter()
             .find(|r| r.version == age)
             .expect("still tracked");
-        assert!(entry.inactive_at.is_none(), "the state no longer calls it inactive");
+        assert!(
+            entry.inactive_at.is_none(),
+            "the state no longer calls it inactive"
+        );
     }
 
     /// Real AWS cleanup: terminates the two harness sessions (`PROBE_OLD_MICROVM`,
@@ -8062,7 +8065,10 @@ mod tests {
         let live = LiveHarness::from_env();
         for name in ["PROBE_OLD_MICROVM", "PROBE_PAUSED_MICROVM"] {
             let id = std::env::var(name).unwrap();
-            println!("{name} {id}: terminate {:?}", live.client.terminate_microvm(&id).await.is_ok());
+            println!(
+                "{name} {id}: terminate {:?}",
+                live.client.terminate_microvm(&id).await.is_ok()
+            );
         }
     }
 
@@ -8112,7 +8118,11 @@ mod tests {
         let old = std::env::var("PROBE_OLD_MICROVM").unwrap();
         let paused = std::env::var("PROBE_PAUSED_MICROVM").unwrap();
         let state = live.client.get_microvm(&old).await.unwrap().state;
-        assert_eq!(state.as_deref(), Some("RUNNING"), "the running session runs");
+        assert_eq!(
+            state.as_deref(),
+            Some("RUNNING"),
+            "the running session runs"
+        );
         live.client.resume_microvm(&paused).await.expect("resume");
         let mut running = false;
         for _ in 0..60 {
@@ -8820,6 +8830,122 @@ mod tests {
         let error = format!("{:?}", executor.step().await.expect_err("the bound passed"));
         assert!(error.contains("api"), "{error}");
         assert!(error.contains("of 50 versions"), "{error}");
+    }
+
+    /// The blocked sandbox with the production Lambda worker controller as its dependent: the
+    /// worker's saved config is the previous release's and its live Lambda environment holds
+    /// `binding` for the sandbox (none when `None`, an error when the read fails).
+    async fn executor_with_real_worker(
+        image: &Arc<blocked_rollout::FakeImage>,
+        live_environment: std::result::Result<std::collections::HashMap<String, String>, ()>,
+    ) -> SingleControllerExecutor {
+        use alien_aws_clients::lambda::MockLambdaApi;
+        use blocked_rollout::*;
+        let mut lambda = MockLambdaApi::new();
+        lambda
+            .expect_get_function_environment()
+            .returning(move |_| {
+                live_environment.clone().map_err(|_| {
+                    AlienError::new(CloudClientErrorData::GenericError {
+                        message: "throttled".to_string(),
+                    })
+                })
+            });
+        let lambda = Arc::new(lambda);
+        let mut microvms = image.client();
+        microvms
+            .expect_list_microvm_image_versions()
+            .returning(|_| Ok(vec![]));
+        let microvms = Arc::new(microvms);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_microvms_client()
+            .returning(move |_| Ok(microvms.clone()));
+        provider
+            .expect_get_aws_lambda_client()
+            .returning(move |_| Ok(lambda.clone()));
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(sandbox_with_bundle(
+                "s3://alien-bundles-test/sandbox/next.zip",
+            ))
+            .controller(blocked_controller())
+            .platform(Platform::Aws)
+            .service_provider(Arc::new(provider))
+            .with_stack_resource(consumer("new"), alien_core::ResourceLifecycle::Live)
+            .build()
+            .await
+            .expect("executor should build");
+        let mut saved = alien_core::StackResourceState::builder()
+            .resource_type(alien_core::Worker::RESOURCE_TYPE.to_string())
+            .status(ResourceStatus::Running)
+            .config(alien_core::Resource::new(consumer("old")))
+            .lifecycle(alien_core::ResourceLifecycle::Live)
+            .build();
+        saved
+            .set_internal_controller(Some(Box::new(crate::AwsWorkerController::mock_ready(
+                "api-fn",
+            ))))
+            .unwrap();
+        executor.insert_saved_resource("api", saved);
+        executor
+    }
+
+    fn sandbox_binding_variable(version: &str) -> std::collections::HashMap<String, String> {
+        std::collections::HashMap::from([(
+            alien_core::bindings::binding_env_var_name("agents"),
+            format!(r#"{{"service":"sandbox-aws","imageVersion":"{version}"}}"#),
+        )])
+    }
+
+    /// The same retry with the real worker controller: nothing supplies the answer, the worker
+    /// reads the binding its live Lambda function runs. A worker still on the previous
+    /// release's binding keeps that version and the retry frees the rest.
+    #[tokio::test]
+    async fn a_real_worker_on_the_previous_binding_lets_the_retry_retire() {
+        use blocked_rollout::*;
+        let image = FakeImage::at_cap();
+        let mut executor =
+            executor_with_real_worker(&image, Ok(sandbox_binding_variable("30.0"))).await;
+        for _ in 0..8 {
+            executor
+                .step()
+                .await
+                .expect("a draining image is a wait, not a failure");
+        }
+        let retired = image.retire_calls.lock().unwrap().clone();
+        assert!(retired.len() >= 40, "versions go inactive, got {retired:?}");
+        assert!(
+            !retired
+                .iter()
+                .any(|v| v == "30.0" || v == "49.0" || v == "50.0"),
+            "the worker's binding, the previous version and the serving one stay: {retired:?}"
+        );
+        assert!(executor
+            .internal_state::<AwsSandboxController>()
+            .unwrap()
+            .retire_blocked_by
+            .is_empty());
+        assert_eq!(*image.build_calls.lock().unwrap(), 0);
+    }
+
+    /// A worker whose function cannot be read, or whose binding names no concrete version, is
+    /// unproven: nothing is retired and the wait names it.
+    #[tokio::test]
+    async fn a_real_worker_that_cannot_be_read_blocks_retirement() {
+        use blocked_rollout::*;
+        let unreadable_binding = std::collections::HashMap::from([(
+            alien_core::bindings::binding_env_var_name("agents"),
+            r#"{"service":"sandbox-aws","imageVersion":{"secretRef":{"name":"s","key":"k"}}}"#
+                .to_string(),
+        )]);
+        for environment in [Err(()), Ok(unreadable_binding)] {
+            let image = FakeImage::at_cap();
+            let mut executor = executor_with_real_worker(&image, environment).await;
+            executor.step().await.expect("a blocked roll waits");
+            assert!(image.retire_calls.lock().unwrap().is_empty());
+            let waiting = executor.internal_state::<AwsSandboxController>().unwrap();
+            assert_eq!(waiting.retire_blocked_by, vec!["api".to_string()]);
+        }
     }
 
     /// A compute cluster that cannot answer (old machines that report nothing) leaves only its

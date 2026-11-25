@@ -986,6 +986,50 @@ fn worker_wants_streaming(worker: &Worker) -> bool {
 
 #[controller]
 impl AwsWorkerController {
+    /// The sandbox image version the live Lambda function launches sessions on, read from the
+    /// binding variable the function runs with, not from the release being applied: a worker
+    /// that has not been updated yet still launches the version its environment names.
+    async fn launchable_sandbox_versions(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        _dependent_id: &str,
+        sandbox_id: &str,
+    ) -> Result<crate::core::LaunchableSandboxVersions> {
+        use crate::core::LaunchableSandboxVersions::{Known, Unproven};
+        // No function was ever created: nothing can launch a session.
+        let Some(function_name) = self.worker_name.as_deref() else {
+            return Ok(Known(Vec::new()));
+        };
+        let client = ctx
+            .service_provider
+            .get_aws_lambda_client(ctx.get_aws_config()?)
+            .await?;
+        let live = client
+            .get_function_environment(function_name)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to read the worker's environment to see which sandbox image \
+                          versions it launches"
+                    .to_string(),
+                resource_id: Some(function_name.to_string()),
+            })?;
+        let Some(binding) = live.get(&alien_core::bindings::binding_env_var_name(sandbox_id))
+        else {
+            // The function runs without a binding for this sandbox.
+            return Ok(Known(Vec::new()));
+        };
+        // Names only in reasons: binding values can carry secrets.
+        let version = serde_json::from_str::<serde_json::Value>(binding)
+            .ok()
+            .and_then(|binding| binding.get("imageVersion")?.as_str().map(str::to_string));
+        Ok(match version {
+            Some(version) => Known(vec![version]),
+            None => Unproven {
+                reason: "its sandbox binding does not name a concrete image version".to_string(),
+            },
+        })
+    }
+
     // DeleteStart only routes. The API gateway step deletes the mapping, domain and API one
     // by one and records each removal, so a denial part-way through it is not mistaken for
     // nothing deleted.
