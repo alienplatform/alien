@@ -1,8 +1,10 @@
 // Per-thread event buffers. A turn's output is buffered here so the control plane can read it
 // with a long poll over the command channel, which is request/response.
 
+import { StringDecoder } from "node:string_decoder"
+
 export type RunnerEvent =
-  | { seq: number; kind: "turn-start"; turnId: string; user: string }
+  | { seq: number; kind: "turn-start"; turnId: string }
   | { seq: number; kind: "agent"; event: Record<string, unknown> }
   | { seq: number; kind: "stderr"; text: string }
   | { seq: number; kind: "turn-end"; turnId: string; exitCode: number | null; error?: string }
@@ -31,6 +33,8 @@ export class ThreadEvents {
   readonly lock = new Mutex()
   running = false
   sessionId: string | undefined
+  /** The running turn's process, so it can be stopped. */
+  stop: (() => Promise<void>) | undefined
   private events: RunnerEvent[] = []
   private seq = 0
   private waiters: Array<() => void> = []
@@ -57,9 +61,18 @@ export class ThreadEvents {
   }
 }
 
-/** Splits a byte stream into lines; the last partial line is kept until it completes. */
+/**
+ * Splits a byte stream into lines; the last partial line is kept until it completes. A
+ * character can arrive split across two frames, so bytes go through a decoder that holds the
+ * incomplete tail.
+ */
 export class LineSplitter {
   private rest = ""
+  private decoder = new StringDecoder("utf8")
+
+  feedBytes(chunk: Uint8Array): string[] {
+    return this.feed(this.decoder.write(Buffer.from(chunk)))
+  }
 
   feed(chunk: string): string[] {
     const text = this.rest + chunk
@@ -69,6 +82,7 @@ export class LineSplitter {
   }
 
   flush(): string[] {
+    this.rest += this.decoder.end()
     const last = this.rest.trim()
     this.rest = ""
     return last ? [last] : []

@@ -4,10 +4,11 @@
 //   open       { threadId, sandboxId? }             create the thread's sandbox, or resume it
 //   bind-turn  { sandboxId, token }                 install the turn token on the connector link
 //   unbind-turn { sandboxId }                       remove every credential rule from the sandbox
-//   end-processes { sandboxId, user }               end what that user's turns left running
-//   turn       { threadId, sandboxId, sessionId?, user, text }   start one agent turn
+//   end-processes { sandboxId }                     end every process the sandbox itself did not start
+//   stop-turn  { threadId }                         kill the running turn's agent process
+//   turn       { threadId, sandboxId, sessionId?, text }   start one agent turn
 //   events     { threadId, after, waitMs? }         long-poll the turn's events
-//   exec       { sandboxId, command, user }         run a shell command in the sandbox
+//   exec       { sandboxId, command }              run a shell command in the sandbox
 //   pause      { threadId, sandboxId }              pause an idle sandbox
 //   close      { sandboxId }                        end it
 //
@@ -20,9 +21,10 @@
 // Open, turn start and pause of one thread run one at a time (the thread's lock).
 
 import { randomUUID } from "node:crypto"
+import { StringDecoder } from "node:string_decoder"
 import { sandbox } from "@alienplatform/bindings"
 import { createCommandReceiver } from "@alienplatform/commands"
-import { END_PROCESSES_SCRIPT, TURN_USER_VAR } from "./processes"
+import { SWEEP_SCRIPT } from "./processes"
 import { LineSplitter, pauseWhenIdle, startTurn, ThreadEvents } from "./turns"
 
 const agent = sandbox("agent")
@@ -37,6 +39,9 @@ const PLACEHOLDER_ENV = {
   ANTHROPIC_API_KEY: "placeholder",
   CONNECTOR_TOKEN: "placeholder",
 }
+
+// Changes when this process restarts; the control plane resets its place in the event stream.
+const GENERATION = randomUUID()
 
 const threads = new Map<string, ThreadEvents>()
 function thread(threadId: string): ThreadEvents {
@@ -84,15 +89,13 @@ async function prepareWorkspace(sandboxId: string) {
   }
 }
 
-async function agentEnv(user: string): Promise<Record<string, string>> {
+async function agentEnv(): Promise<Record<string, string>> {
   const modelUrl = await agent.linkUrl("model", 8080)
   const connectorUrl = await agent.linkUrl("connector", 8080)
   if (!modelUrl || !connectorUrl) throw new Error("the agent sandbox must link model and connector")
   return {
     // Also passed with every command: a local sandbox takes its environment from the command.
     ...PLACEHOLDER_ENV,
-    // Marks every process this command starts, so a user switch can end them (processes.ts).
-    [TURN_USER_VAR]: user,
     ANTHROPIC_BASE_URL: modelUrl.replace(/\/$/, ""),
     CONNECTOR_URL: connectorUrl.replace(/\/$/, ""),
     ANTHROPIC_MODEL: MODEL,
@@ -115,11 +118,10 @@ async function runTurn(
   t: ThreadEvents,
   sandboxId: string,
   sessionId: string | undefined,
-  user: string,
   text: string,
 ) {
   const turnId = randomUUID()
-  t.push({ kind: "turn-start", turnId, user })
+  t.push({ kind: "turn-start", turnId })
   const args = [
     "-p",
     "--input-format",
@@ -141,9 +143,10 @@ async function runTurn(
     const proc = await agent.runInteractive(sandboxId, "claude", {
       args,
       cwd: WORKSPACE_DIR,
-      env: await agentEnv(user),
+      env: await agentEnv(),
       timeoutMs: TURN_TIMEOUT_MS,
     })
+    t.stop = () => proc.signal("kill")
     const message = { type: "user", message: { role: "user", content: [{ type: "text", text }] } }
     await proc.write(`${JSON.stringify(message)}\n`)
     // End of input: Claude Code answers the one message, prints its `result` and exits.
@@ -166,14 +169,17 @@ async function runTurn(
       }
     }
     for await (const frame of proc) {
-      if (frame.kind === "stdout") out.feed(frame.data.toString("utf8")).forEach(onLine)
+      if (frame.kind === "stdout") out.feedBytes(frame.data).forEach(onLine)
       else if (frame.kind === "stderr")
-        err.feed(frame.data.toString("utf8")).forEach(text => {
+        err.feedBytes(frame.data).forEach(text => {
           t.push({ kind: "stderr", text })
         })
       else if (frame.kind === "exit") exitCode = frame.exitCode
     }
     out.flush().forEach(onLine)
+    err.flush().forEach(text => {
+      t.push({ kind: "stderr", text })
+    })
   } catch (e) {
     error = e instanceof Error ? e.message : String(e)
     console.error(`turn ${turnId} failed`, e)
@@ -185,6 +191,7 @@ async function runTurn(
       console.error(`turn ${turnId}: removing the credentials failed`, e)
       error ??= `could not remove the turn's credentials: ${e instanceof Error ? e.message : String(e)}`
     }
+    t.stop = undefined
     t.running = false
     t.push({ kind: "turn-end", turnId, exitCode, ...(error ? { error } : {}) })
   }
@@ -238,32 +245,51 @@ receiver.command("unbind-turn", async input => {
   return { unbound: true }
 })
 
-// What the previous user's turns started must not run as the next user.
+// A user switch ends everything the thread's turns left in the sandbox, then lists again: if
+// anything is still there (or the listing fails) this throws, and the turn does not start.
 receiver.command("end-processes", async input => {
-  const i = obj(input)
-  const user = str(i, "user")
-  const ended: string[] = []
-  for await (const frame of agent.runCommand(str(i, "sandboxId"), "sh", {
-    args: ["-c", END_PROCESSES_SCRIPT],
-    env: { OWNER: user },
-    timeoutMs: 30_000,
-  })) {
-    if (frame.kind === "stdout")
-      ended.push(...frame.data.toString("utf8").split("\n").filter(Boolean))
+  const sandboxId = str(obj(input), "sandboxId")
+  const run = async (mode: "sweep" | "list") => {
+    const pids: string[] = []
+    let exitCode: number | null = null
+    const decoder = new StringDecoder("utf8")
+    let text = ""
+    for await (const frame of agent.runCommand(sandboxId, "sh", {
+      args: ["-c", SWEEP_SCRIPT, "sweep-script", mode],
+      timeoutMs: 30_000,
+    })) {
+      if (frame.kind === "stdout") text += decoder.write(frame.data)
+      else if (frame.kind === "exit") exitCode = frame.exitCode
+    }
+    text += decoder.end()
+    if (exitCode !== 0) throw new Error(`the process ${mode} exited with ${exitCode}`)
+    pids.push(...text.split("\n").filter(Boolean))
+    return pids
   }
-  return { ended: ended.length }
+  const ended = await run("sweep")
+  const left = await run("list")
+  if (left.length > 0)
+    throw new Error(
+      `${left.length} process${left.length === 1 ? "" : "es"} still running after the sweep`,
+    )
+  return { ended: ended.length, remaining: 0 }
+})
+
+receiver.command("stop-turn", async input => {
+  const t = thread(str(obj(input), "threadId"))
+  if (t.running && t.stop) await t.stop()
+  return { stopped: true, running: t.running }
 })
 
 receiver.command("turn", async input => {
   const i = obj(input)
   const threadId = str(i, "threadId")
   const sandboxId = str(i, "sandboxId")
-  const user = str(i, "user")
   const text = str(i, "text")
   const t = thread(threadId)
   // The router's store survives a runner restart; this process's memory may not.
   const sessionId = optStr(i, "sessionId") ?? t.sessionId
-  await startTurn(t, () => void runTurn(t, sandboxId, sessionId, user, text))
+  await startTurn(t, () => void runTurn(t, sandboxId, sessionId, text))
   return { started: true }
 })
 
@@ -273,27 +299,30 @@ receiver.command("events", async input => {
   const after = typeof i.after === "number" ? i.after : 0
   const waitMs = Math.min(typeof i.waitMs === "number" ? i.waitMs : 15_000, 20_000)
   const events = await t.after(after, waitMs)
-  return { events, running: t.running, sessionId: t.sessionId ?? null }
+  return { events, running: t.running, sessionId: t.sessionId ?? null, generation: GENERATION }
 })
 
 receiver.command("exec", async input => {
   const i = obj(input)
   const sandboxId = str(i, "sandboxId")
   const command = str(i, "command")
-  const user = str(i, "user")
   let stdout = ""
   let stderr = ""
+  const outDecoder = new StringDecoder("utf8")
+  const errDecoder = new StringDecoder("utf8")
   let exitCode: number | null = null
   for await (const frame of agent.runCommand(sandboxId, "sh", {
     args: ["-c", command],
     cwd: WORKSPACE_DIR,
-    env: await agentEnv(user),
+    env: await agentEnv(),
     timeoutMs: 30_000,
   })) {
-    if (frame.kind === "stdout") stdout += frame.data.toString("utf8")
-    else if (frame.kind === "stderr") stderr += frame.data.toString("utf8")
+    if (frame.kind === "stdout") stdout += outDecoder.write(frame.data)
+    else if (frame.kind === "stderr") stderr += errDecoder.write(frame.data)
     else if (frame.kind === "exit") exitCode = frame.exitCode
   }
+  stdout += outDecoder.end()
+  stderr += errDecoder.end()
   return { exitCode, stdout: stdout.slice(-20_000), stderr: stderr.slice(-20_000) }
 })
 

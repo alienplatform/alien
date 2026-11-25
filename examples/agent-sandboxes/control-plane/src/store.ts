@@ -6,7 +6,16 @@ import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 export interface Thread {
   id: string
   title: string
+  /** Who is asking now. */
   user: string
+  /**
+   * Whose processes may still be running in the sandbox. It becomes the asking user only after
+   * the sandbox was swept and bound for them, so a failed switch is swept again on the retry.
+   */
+  owner?: string
+  /** The last runner event this control plane has read, and the runner run it belongs to. */
+  cursor?: number
+  generation?: string
   sandboxId?: string
   sessionId?: string
   state: "new" | "running" | "idle" | "paused"

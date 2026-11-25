@@ -4,12 +4,14 @@ import { ThreadRouter, type UiEvent } from "../control-plane/src/router"
 import { ThreadStore } from "../control-plane/src/store"
 
 // A data plane that records the order of calls and plays back one short turn.
-function fakeDataPlane(options: { pauseResume: boolean; pauseMs?: number }) {
+function fakeDataPlane(options: { pauseResume: boolean; pauseMs?: number; execMs?: number }) {
   const calls: string[] = []
   let paused = false
   let running = false
   let created = 0
   let events: RunnerEvent[] = []
+  let generation = "gen-1"
+  let override: RunnerEvent[] | undefined
   const dp: DataPlane = {
     async open(_threadId, sandboxId) {
       calls.push(`open ${sandboxId ?? "-"}`)
@@ -31,9 +33,13 @@ function fakeDataPlane(options: { pauseResume: boolean; pauseMs?: number }) {
       return { bound: true }
     },
     async turn(input) {
-      calls.push(`turn ${input.sandboxId} ${input.sessionId ?? "-"} ${input.user}`)
+      calls.push(`turn ${input.sandboxId} ${input.sessionId ?? "-"}`)
       // A turn that is still running has not produced its end yet.
       if (running) return
+      if (override) {
+        events = override
+        return
+      }
       events = [
         { seq: 1, kind: "agent", event: { type: "system", subtype: "init", session_id: "sess-1" } },
         { seq: 2, kind: "agent", event: { type: "result" } },
@@ -42,17 +48,29 @@ function fakeDataPlane(options: { pauseResume: boolean; pauseMs?: number }) {
     },
     async events(_threadId, after) {
       await new Promise(r => setTimeout(r, 1))
-      return { events: events.filter(e => e.seq > after), running, sessionId: "sess-1" }
+      return {
+        events: events.filter(e => e.seq > after),
+        running,
+        sessionId: "sess-1",
+        generation,
+      }
     },
     async endTurn(threadId, sandboxId) {
       calls.push(`end-turn ${threadId} ${sandboxId}`)
     },
-    async endProcesses(sandboxId, user) {
-      calls.push(`end-processes ${sandboxId} ${user}`)
+    async stopTurn(threadId) {
+      calls.push(`stop-turn ${threadId}`)
+      running = false
+      return { stopped: true, running }
+    },
+    async endProcesses(sandboxId) {
+      calls.push(`end-processes ${sandboxId}`)
       return { ended: 2 }
     },
-    async exec(_sandboxId, _command, user) {
-      calls.push(`exec ${user}`)
+    async exec(sandboxId, command) {
+      calls.push(`exec ${sandboxId} ${command} start`)
+      await new Promise(r => setTimeout(r, options.execMs ?? 0))
+      calls.push(`exec ${sandboxId} ${command} end`)
       return { exitCode: 0, stdout: "", stderr: "" }
     },
     async pause(_threadId, sandboxId) {
@@ -70,7 +88,13 @@ function fakeDataPlane(options: { pauseResume: boolean; pauseMs?: number }) {
       return { decided: true }
     },
   }
-  return { dp, calls, setRunning: (value: boolean) => (running = value) }
+  return {
+    dp,
+    calls,
+    setRunning: (value: boolean) => (running = value),
+    setGeneration: (value: string) => (generation = value),
+    setEvents: (value: RunnerEvent[]) => (override = value),
+  }
 }
 
 async function until(check: () => boolean): Promise<void> {
@@ -94,13 +118,13 @@ describe("thread router", () => {
       "open -",
       `issue-token ${thread.id} alice`,
       "bind-turn sbx-1 tok-alice",
-      "turn sbx-1 - alice",
+      "turn sbx-1 -",
       `end-turn ${thread.id} sbx-1`,
       "open sbx-1",
-      "end-processes sbx-1 alice",
+      "end-processes sbx-1",
       `issue-token ${thread.id} bob`,
       "bind-turn sbx-1 tok-bob",
-      "turn sbx-1 sess-1 bob",
+      "turn sbx-1 sess-1",
       `end-turn ${thread.id} sbx-1`,
     ])
   })
@@ -167,7 +191,7 @@ describe("thread router", () => {
     await router.send(thread.id, "alice", "hello")
     await until(() => store.get(thread.id)?.state === "idle")
     expect(calls.indexOf(`end-turn ${thread.id} sbx-1`)).toBeGreaterThan(
-      calls.indexOf("turn sbx-1 - alice"),
+      calls.indexOf("turn sbx-1 -"),
     )
   })
 
@@ -187,13 +211,212 @@ describe("thread router", () => {
 
     await router.send(thread.id, "bob", "three")
     await until(() => store.get(thread.id)?.state === "idle")
-    expect(calls.filter(c => c.startsWith("end-processes"))).toEqual(["end-processes sbx-1 alice"])
-    const ended = calls.indexOf("end-processes sbx-1 alice")
+    expect(calls.filter(c => c.startsWith("end-processes"))).toEqual(["end-processes sbx-1"])
+    const ended = calls.indexOf("end-processes sbx-1")
     expect(ended).toBeLessThan(calls.indexOf(`issue-token ${thread.id} bob`))
     expect(seen).toContainEqual({
       type: "notice",
       text: "ended 2 processes that alice's turns left running",
     })
+  })
+
+  it("a failed sweep stops the turn, and the retry sweeps again", async () => {
+    const { dp, calls } = fakeDataPlane({ pauseResume: true })
+    const store = new ThreadStore()
+    const router = new ThreadRouter(dp, store, { idlePauseMs: 60_000, pollMs: 1 })
+    const thread = router.create("Orders", "alice")
+    await router.send(thread.id, "alice", "one")
+    await until(() => store.get(thread.id)?.state === "idle")
+
+    const sweep = dp.endProcesses
+    dp.endProcesses = async sandboxId => {
+      calls.push(`end-processes ${sandboxId} (fails)`)
+      throw new Error("1 process still running after the sweep")
+    }
+    await expect(router.send(thread.id, "bob", "two")).rejects.toThrow("still running")
+    expect(calls.filter(c => c.startsWith("turn "))).toHaveLength(1)
+    expect(store.get(thread.id)?.owner).toBe("alice")
+    expect(store.get(thread.id)?.user).toBe("bob")
+
+    dp.endProcesses = sweep
+    await router.send(thread.id, "bob", "two again")
+    await until(() => store.get(thread.id)?.state === "idle")
+    expect(calls).toContain("end-processes sbx-1")
+    expect(calls.filter(c => c.startsWith("turn "))).toHaveLength(2)
+    expect(store.get(thread.id)?.owner).toBe("bob")
+  })
+
+  it("a user switch waits for a running exec and sweeps after it", async () => {
+    const { dp, calls } = fakeDataPlane({ pauseResume: true, execMs: 40 })
+    const store = new ThreadStore()
+    const router = new ThreadRouter(dp, store, { idlePauseMs: 60_000, pollMs: 1 })
+    const thread = router.create("Orders", "alice")
+    await router.send(thread.id, "alice", "one")
+    await until(() => store.get(thread.id)?.state === "idle")
+
+    const exec = router.exec(thread.id, "sleep 99 &")
+    await until(() => calls.includes("exec sbx-1 sleep 99 & start"))
+    const send = router.send(thread.id, "bob", "two")
+    await exec
+    await send
+    expect(calls.indexOf("end-processes sbx-1")).toBeGreaterThan(
+      calls.indexOf("exec sbx-1 sleep 99 & end"),
+    )
+  })
+
+  it("does not pause while an exec runs, and pauses after it once idle again", async () => {
+    const { dp, calls } = fakeDataPlane({ pauseResume: true, execMs: 60 })
+    const store = new ThreadStore()
+    const router = new ThreadRouter(dp, store, { idlePauseMs: 20, pollMs: 1 })
+    const thread = router.create("Orders", "alice")
+    await router.send(thread.id, "alice", "one")
+    await until(() => store.get(thread.id)?.state === "paused")
+    calls.length = 0
+
+    await router.exec(thread.id, "ls")
+    expect(calls.filter(c => c.startsWith("pause"))).toEqual([])
+    await until(() => calls.includes("pause sbx-1 end"))
+    expect(calls.indexOf("pause sbx-1 end")).toBeGreaterThan(calls.indexOf("exec sbx-1 ls end"))
+  })
+
+  it("a poll error does not end a turn that may still run; polling resumes", async () => {
+    const { dp, calls, setRunning } = fakeDataPlane({ pauseResume: true })
+    const real = dp.events
+    let failing = 3
+    dp.events = async (...args) => {
+      if (failing-- > 0) throw new Error("command timed out")
+      return real(...args)
+    }
+    setRunning(false)
+    const store = new ThreadStore()
+    const router = new ThreadRouter(dp, store, {
+      idlePauseMs: 60_000,
+      pollMs: 1,
+      retryMs: 1,
+      giveUpMs: 60_000,
+    })
+    const thread = router.create("Orders", "alice")
+    const seen: UiEvent[] = []
+    router.subscribe(thread.id, e => seen.push(e))
+    await router.send(thread.id, "alice", "hello")
+    await new Promise(r => setTimeout(r, 5))
+    expect(store.get(thread.id)?.state).toBe("running")
+    expect(calls.some(c => c.startsWith("end-turn"))).toBe(false)
+    await until(() => store.get(thread.id)?.state === "idle")
+    expect(seen.some(e => e.type === "agent")).toBe(true)
+  })
+
+  it("after the give-up time the turn is stopped through the runner", async () => {
+    const { dp, calls, setRunning } = fakeDataPlane({ pauseResume: true })
+    dp.events = async () => {
+      throw new Error("command timed out")
+    }
+    setRunning(true)
+    const store = new ThreadStore()
+    const router = new ThreadRouter(dp, store, {
+      idlePauseMs: 60_000,
+      pollMs: 1,
+      retryMs: 1,
+      giveUpMs: 20,
+    })
+    const thread = router.create("Orders", "alice")
+    await router.send(thread.id, "alice", "hello")
+    await until(() => store.get(thread.id)?.state === "idle")
+    expect(calls).toContain(`stop-turn ${thread.id}`)
+    expect(calls).toContain(`end-turn ${thread.id} sbx-1`)
+  })
+
+  it("if the runner cannot be reached at all, the thread stays running with access intact", async () => {
+    const { dp, calls, setRunning } = fakeDataPlane({ pauseResume: true })
+    dp.events = async () => {
+      throw new Error("command timed out")
+    }
+    dp.stopTurn = async () => {
+      throw new Error("no runner")
+    }
+    setRunning(true)
+    const store = new ThreadStore()
+    const router = new ThreadRouter(dp, store, {
+      idlePauseMs: 60_000,
+      pollMs: 1,
+      retryMs: 1,
+      giveUpMs: 10,
+    })
+    const thread = router.create("Orders", "alice")
+    const seen: UiEvent[] = []
+    router.subscribe(thread.id, e => seen.push(e))
+    await router.send(thread.id, "alice", "hello")
+    await until(() => seen.some(e => e.type === "notice" && e.text.includes("cannot reach")))
+    await new Promise(r => setTimeout(r, 30))
+    expect(store.get(thread.id)?.state).toBe("running")
+    expect(calls.some(c => c.startsWith("end-turn"))).toBe(false)
+  })
+
+  it("a restarted runner (new generation) is read again from its first event", async () => {
+    const { dp, setGeneration, setEvents } = fakeDataPlane({ pauseResume: true })
+    const store = new ThreadStore()
+    const router = new ThreadRouter(dp, store, { idlePauseMs: 60_000, pollMs: 1 })
+    const thread = router.create("Orders", "alice")
+    const seen: UiEvent[] = []
+    router.subscribe(thread.id, e => seen.push(e))
+    await router.send(thread.id, "alice", "one")
+    await until(() => store.get(thread.id)?.state === "idle")
+    expect(store.get(thread.id)?.cursor).toBe(3)
+
+    // The runner restarted: numbering starts at 1 and the new turn has two events.
+    setGeneration("gen-2")
+    setEvents([
+      { seq: 1, kind: "agent", event: { type: "text-after-restart" } },
+      { seq: 2, kind: "turn-end", exitCode: 0 },
+    ])
+    const turns = seen.filter(e => e.type === "agent").length
+    await router.send(thread.id, "alice", "two")
+    await until(() => store.get(thread.id)?.state === "idle")
+    expect(seen.filter(e => e.type === "agent").length).toBe(turns + 1)
+    expect(store.get(thread.id)?.cursor).toBe(2)
+    expect(store.get(thread.id)?.generation).toBe("gen-2")
+  })
+
+  it("after a restart, a thread saved as running is read again and finished; idle ones get timers", async () => {
+    const { dp, calls } = fakeDataPlane({ pauseResume: true })
+    const store = new ThreadStore()
+    store.put({
+      id: "r1",
+      title: "a",
+      user: "alice",
+      owner: "alice",
+      sandboxId: "sbx-9",
+      state: "running",
+      lastActivity: 1,
+    })
+    store.put({
+      id: "i1",
+      title: "b",
+      user: "alice",
+      owner: "alice",
+      sandboxId: "sbx-8",
+      state: "idle",
+      lastActivity: 1,
+    })
+    const router = new ThreadRouter(dp, store, { idlePauseMs: 10, pollMs: 1 })
+    router.recover()
+    // The runner says no turn is running and has no events: the thread is finished.
+    await until(() => store.get("r1")?.state !== "running")
+    expect(calls).toContain("end-turn r1 sbx-9")
+    await until(() => calls.includes("pause sbx-8 end"))
+  })
+
+  it("tells listeners each event's place in the log", async () => {
+    const { dp } = fakeDataPlane({ pauseResume: true })
+    const store = new ThreadStore()
+    const router = new ThreadRouter(dp, store, { idlePauseMs: 60_000, pollMs: 1 })
+    const thread = router.create("Orders", "alice")
+    const seen: number[] = []
+    router.subscribe(thread.id, (_event, index) => seen.push(index))
+    await router.send(thread.id, "alice", "hello")
+    await until(() => store.get(thread.id)?.state === "idle")
+    expect(seen).toEqual(seen.map((_, i) => i))
+    expect(seen.length).toBe(router.history(thread.id).length)
   })
 
   it("a message that arrives during a pause waits for it, then resumes the sandbox", async () => {

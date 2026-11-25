@@ -26,6 +26,8 @@ const router = new ThreadRouter(dp, store, {
   idlePauseMs: Number(process.env.IDLE_PAUSE_SECONDS ?? 120) * 1000,
 })
 
+router.recover()
+
 const page = (name: string) => readFileSync(new URL(`../public/${name}`, import.meta.url), "utf8")
 const app = new Hono()
 
@@ -75,14 +77,19 @@ app.post("/api/threads/:id/approvals/:approval", async c => {
 app.get("/api/threads/:id/events", c => {
   const id = c.req.param("id")
   return streamSSE(c, async stream => {
-    for (const event of router.history(id)) await stream.writeSSE({ data: JSON.stringify(event) })
-    const queue: string[] = []
+    // Subscribe first and hold what arrives, then send the log as it is now, then the held
+    // events that the log did not already have.
+    const queue: Array<{ index: number; data: string }> = []
     let wake: (() => void) | undefined
-    const unsubscribe = router.subscribe(id, event => {
-      queue.push(JSON.stringify(event))
+    const unsubscribe = router.subscribe(id, (event, index) => {
+      queue.push({ index, data: JSON.stringify(event) })
       wake?.()
     })
     stream.onAbort(unsubscribe)
+    const snapshot = router.history(id).slice()
+    for (const event of snapshot) await stream.writeSSE({ data: JSON.stringify(event) })
+    while (queue.length > 0 && (queue[0] as { index: number }).index < snapshot.length)
+      queue.shift()
     while (!stream.aborted) {
       if (queue.length === 0) {
         await new Promise<void>(resolve => {
@@ -92,7 +99,8 @@ app.get("/api/threads/:id/events", c => {
         wake = undefined
         if (queue.length === 0) await stream.writeSSE({ event: "ping", data: "" })
       }
-      while (queue.length > 0) await stream.writeSSE({ data: queue.shift() as string })
+      while (queue.length > 0)
+        await stream.writeSSE({ data: (queue.shift() as { data: string }).data })
     }
   })
 })

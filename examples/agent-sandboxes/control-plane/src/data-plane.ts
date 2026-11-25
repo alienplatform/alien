@@ -13,6 +13,8 @@ export interface EventsResult {
   events: RunnerEvent[]
   running: boolean
   sessionId: string | null
+  /** Changes when the runner restarts: its event numbers start again. */
+  generation: string
 }
 export type RunnerEvent = { seq: number; kind: string } & Record<string, unknown>
 export interface PendingWrite {
@@ -33,18 +35,21 @@ export interface DataPlane {
     threadId: string
     sandboxId: string
     sessionId?: string
-    user: string
     text: string
   }): Promise<void>
   events(threadId: string, after: number, waitMs: number): Promise<EventsResult>
   /** Ends the turn's access: the connector forgets the thread's token and the sandbox's rules are removed. */
   endTurn(threadId: string, sandboxId: string): Promise<void>
-  /** Ends every process the user's turns left running in the sandbox. */
-  endProcesses(sandboxId: string, user: string): Promise<{ ended: number }>
+  /** Kills the running turn's agent process; rejects if the runner cannot be reached. */
+  stopTurn(threadId: string): Promise<{ stopped: boolean; running: boolean }>
+  /**
+   * Ends every process in the sandbox that is not the sandbox's own, then lists again. Rejects
+   * if anything is left or the listing fails.
+   */
+  endProcesses(sandboxId: string): Promise<{ ended: number }>
   exec(
     sandboxId: string,
     command: string,
-    user: string,
   ): Promise<{ exitCode: number | null; stdout: string; stderr: string }>
   pause(threadId: string, sandboxId: string): Promise<{ paused: boolean; reason?: string }>
   approvals(threadId?: string): Promise<PendingWrite[]>
@@ -79,8 +84,9 @@ export function commandsDataPlane(config: {
         runner.invoke("unbind-turn", { sandboxId }),
       ])
     },
-    endProcesses: (sandboxId, user) => runner.invoke("end-processes", { sandboxId, user }),
-    exec: (sandboxId, command, user) => runner.invoke("exec", { sandboxId, command, user }),
+    stopTurn: threadId => runner.invoke("stop-turn", { threadId }),
+    endProcesses: sandboxId => runner.invoke("end-processes", { sandboxId }),
+    exec: (sandboxId, command) => runner.invoke("exec", { sandboxId, command }),
     pause: (threadId, sandboxId) => runner.invoke("pause", { threadId, sandboxId }),
     approvals: async threadId =>
       (await connector.invoke<{ pending: PendingWrite[] }>("approvals", { threadId })).pending,

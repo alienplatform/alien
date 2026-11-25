@@ -1,7 +1,12 @@
-import { spawn } from "node:child_process"
+import { spawnSync } from "node:child_process"
 import { describe, expect, it } from "vitest"
-import { END_PROCESSES_SCRIPT, TURN_USER_VAR } from "../data-plane/runner/src/processes"
-import { pauseWhenIdle, startTurn, ThreadEvents } from "../data-plane/runner/src/turns"
+import { SWEEP_SCRIPT } from "../data-plane/runner/src/processes"
+import {
+  LineSplitter,
+  pauseWhenIdle,
+  startTurn,
+  ThreadEvents,
+} from "../data-plane/runner/src/turns"
 
 const wait = (ms: number) => new Promise(r => setTimeout(r, ms))
 
@@ -62,43 +67,65 @@ describe("a thread's lock in the runner", () => {
   })
 })
 
-describe("ending a user's processes", () => {
-  // The same script the runner runs in the sandbox, here against real processes.
-  const start = (user: string | undefined) =>
-    spawn("sleep", ["30"], {
-      env: { PATH: process.env.PATH, ...(user ? { [TURN_USER_VAR]: user } : {}) },
-    })
-  const alive = (pid: number | undefined) => {
-    try {
-      process.kill(pid as number, 0)
-      return true
-    } catch {
-      return false
-    }
-  }
+describe("ending what a thread left running", () => {
+  // The sweep ends everything but the sandbox's own processes, so the test runs it in a
+  // throwaway PID namespace (as PID 1 there is the "sandbox's own" process); where such a
+  // namespace cannot be made the test is skipped.
+  const unshare = spawnSync("unshare", [
+    "--user",
+    "--map-root-user",
+    "--pid",
+    "--fork",
+    "--mount-proc",
+    "true",
+  ])
+  const run = (script: string) =>
+    spawnSync(
+      "unshare",
+      ["--user", "--map-root-user", "--pid", "--fork", "--mount-proc", "sh", "-c", script, "outer"],
+      { encoding: "utf8", env: { PATH: process.env.PATH, SWEEP: SWEEP_SCRIPT } },
+    )
 
-  it("ends the previous user's processes and leaves everyone else's", async () => {
-    const alice = start("alice")
-    const bob = start("bob")
-    const bystander = start(undefined)
-    const script = spawn("sh", ["-c", END_PROCESSES_SCRIPT], {
-      env: { PATH: process.env.PATH, OWNER: "alice" },
-    })
-    let out = ""
-    script.stdout.on("data", d => (out += d))
-    await new Promise(resolve => script.on("close", resolve))
-    await wait(50)
-    try {
-      expect(out.split("\n").filter(Boolean)).toContain(String(alice.pid))
-      expect(
-        alive(alice.pid) && !alice.killed && alice.exitCode === null && alice.signalCode === null,
-      ).toBe(false)
-      expect(bob.exitCode === null && bob.signalCode === null).toBe(true)
-      expect(bystander.exitCode === null && bystander.signalCode === null).toBe(true)
-    } finally {
-      bob.kill()
-      bystander.kill()
-      alice.kill()
-    }
+  it.skipIf(unshare.status !== 0)(
+    "ends every process, whatever env or name it has, then lists none",
+    () => {
+      const result = run(
+        [
+          // Processes the agent might leave: one that renames itself through env, a daemon that
+          // detaches, and a plain background job.
+          "SANDBOX_TURN_USER=nobody sleep 300 &",
+          "(setsid sleep 301 &) ",
+          "sleep 302 &",
+          "sleep 0.3",
+          // No pipes: a pipe's other end would be a sibling of the sweep, and be swept too.
+          'sh -c "$SWEEP" sweep list > /tmp/before.$$; echo "before: $(wc -l < /tmp/before.$$)"',
+          'sh -c "$SWEEP" sweep sweep > /tmp/ended.$$; echo "ended: $(wc -l < /tmp/ended.$$)"',
+          'sh -c "$SWEEP" sweep list > /tmp/after.$$; echo "after: $(wc -l < /tmp/after.$$)"',
+          "rm -f /tmp/before.$$ /tmp/ended.$$ /tmp/after.$$",
+        ].join("\n"),
+      )
+      expect(result.stdout).toContain("ended: 3")
+      expect(result.stdout).toContain("after: 0")
+      expect(result.stdout).not.toContain("before: 0")
+    },
+  )
+})
+
+describe("reading the agent's output", () => {
+  it("a character split across two frames arrives whole", () => {
+    const bytes = Buffer.from('{"text":"héllo 日本"}\n')
+    const cut = bytes.indexOf(0xc3) + 1 // between the two bytes of "é"
+    const splitter = new LineSplitter()
+    const lines = [
+      ...splitter.feedBytes(bytes.subarray(0, cut)),
+      ...splitter.feedBytes(bytes.subarray(cut)),
+    ]
+    expect(lines).toEqual(['{"text":"héllo 日本"}'])
+    const second = Buffer.from("日本\n")
+    const lines2 = [
+      ...splitter.feedBytes(second.subarray(0, 2)),
+      ...splitter.feedBytes(second.subarray(2)),
+    ]
+    expect(lines2).toEqual(["日本"])
   })
 })
