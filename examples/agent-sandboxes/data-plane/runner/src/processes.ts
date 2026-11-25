@@ -58,9 +58,11 @@ done
 
 # The runtime runs every command inside a wrapper of its own, as the sandbox user, with a
 # watchdog beside the command. That wrapper is the topmost ancestor that runs as the sandbox user
-# (below PID 1), and it and everything below it belongs to this very command. Nothing of an
-# earlier turn can be below it: the sweep ended all of them, and a process that was started
-# before the sweep is not a child of a wrapper that did not exist yet.
+# (below PID 1), and it and everything below it belongs to this very command. Sparing it is
+# sound because the sweep's kill -9 -1 already ended every process of this user at once, so
+# the only processes of the user that exist now are ones the runtime started for this verify
+# command itself. Nothing of an earlier turn can be below the wrapper: a process that was
+# started before the sweep is not a child of a wrapper that did not exist yet.
 top=$$
 p=$(ppid_of /proc/$$/status)
 while [ -n "$p" ] && [ "$p" != 0 ] && [ "$p" != 1 ]; do
