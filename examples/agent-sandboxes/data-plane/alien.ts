@@ -72,7 +72,11 @@ const agent = new alien.Sandbox("agent")
   .code(
     process.env.SANDBOX_IMAGE
       ? { type: "image", image: process.env.SANDBOX_IMAGE }
-      : { type: "source", src: "./sandbox", toolchain: { type: "docker", dockerfile: "Dockerfile" } },
+      : {
+          type: "source",
+          src: "./sandbox",
+          toolchain: { type: "docker", dockerfile: "Dockerfile" },
+        },
   )
   .egress("internet")
   // No internet: only the two links. A sandbox the runner creates gets this policy.

@@ -47,7 +47,11 @@ export class TurnTokens {
   /** Whether this exact token is still the thread's live token (not revoked, replaced or expired). */
   isCurrent(token: string): boolean {
     const grant = this.byToken.get(token)
-    return grant !== undefined && grant.expiresAt > this.now() && this.byThread.get(grant.threadId) === token
+    return (
+      grant !== undefined &&
+      grant.expiresAt > this.now() &&
+      this.byThread.get(grant.threadId) === token
+    )
   }
 
   /** The grant for an `Authorization: Bearer <token>` header, or why there is none. */

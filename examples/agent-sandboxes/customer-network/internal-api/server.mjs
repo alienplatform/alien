@@ -11,10 +11,34 @@ import { createServer } from "node:http"
 
 const orders = new Map(
   [
-    { id: "1001", customer: "Northwind Books", item: "Standing desk", total: 489.0, status: "shipped" },
-    { id: "1002", customer: "Blue Fern Cafe", item: "Espresso grinder", total: 129.5, status: "processing" },
-    { id: "1003", customer: "Harbor Dental", item: "Label printer", total: 214.99, status: "delivered" },
-    { id: "1004", customer: "Quarry Outfitters", item: "Tent, 4 person", total: 349.0, status: "processing" },
+    {
+      id: "1001",
+      customer: "Northwind Books",
+      item: "Standing desk",
+      total: 489.0,
+      status: "shipped",
+    },
+    {
+      id: "1002",
+      customer: "Blue Fern Cafe",
+      item: "Espresso grinder",
+      total: 129.5,
+      status: "processing",
+    },
+    {
+      id: "1003",
+      customer: "Harbor Dental",
+      item: "Label printer",
+      total: 214.99,
+      status: "delivered",
+    },
+    {
+      id: "1004",
+      customer: "Quarry Outfitters",
+      item: "Tent, 4 person",
+      total: 349.0,
+      status: "processing",
+    },
   ].map(order => [order.id, order]),
 )
 

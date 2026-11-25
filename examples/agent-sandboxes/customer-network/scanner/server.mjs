@@ -29,7 +29,9 @@ function send(res, status, body) {
 createServer((req, res) => {
   const url = new URL(req.url ?? "/", "http://scanner")
   const authorized = req.headers.authorization === `Bearer ${KEY}`
-  console.log(`${new Date().toISOString()} ${req.method} ${url.pathname} ${authorized ? "ok" : "refused"}`)
+  console.log(
+    `${new Date().toISOString()} ${req.method} ${url.pathname} ${authorized ? "ok" : "refused"}`,
+  )
   if (url.pathname === "/health") return send(res, 200, { ok: true })
   if (!authorized) return send(res, 401, { error: "invalid scanner key" })
   if (req.method !== "GET") return send(res, 405, { error: "method not allowed" })

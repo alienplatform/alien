@@ -7,7 +7,8 @@ export async function scannerGet(
   key: string,
   path: string,
 ): Promise<{ status: number; body: unknown }> {
-  if (!baseUrl || !key) return { status: 503, body: { error: "SCANNER_URL or the scanner API key is not set" } }
+  if (!baseUrl || !key)
+    return { status: 503, body: { error: "SCANNER_URL or the scanner API key is not set" } }
   const response = await fetch(`${baseUrl.replace(/\/$/, "")}${path}`, {
     headers: { authorization: `Bearer ${key}` },
   })

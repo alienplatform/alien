@@ -32,6 +32,10 @@ struct TemplateInfo {
 
 const KNOWN_TEMPLATES: &[(&str, &str)] = &[
     (
+        "agent-sandboxes",
+        "Run one sandbox per conversation in each customer's cloud, with a coding agent that reaches private systems only through a connector.",
+    ),
+    (
         "ai-chatbot-ts",
         "Build a streaming AI chatbot over private Postgres data.",
     ),

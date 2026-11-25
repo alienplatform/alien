@@ -65,7 +65,9 @@ describe("a thread's lock in the runner", () => {
 describe("ending a user's processes", () => {
   // The same script the runner runs in the sandbox, here against real processes.
   const start = (user: string | undefined) =>
-    spawn("sleep", ["30"], { env: { PATH: process.env.PATH, ...(user ? { [TURN_USER_VAR]: user } : {}) } })
+    spawn("sleep", ["30"], {
+      env: { PATH: process.env.PATH, ...(user ? { [TURN_USER_VAR]: user } : {}) },
+    })
   const alive = (pid: number | undefined) => {
     try {
       process.kill(pid as number, 0)
@@ -79,14 +81,18 @@ describe("ending a user's processes", () => {
     const alice = start("alice")
     const bob = start("bob")
     const bystander = start(undefined)
-    const script = spawn("sh", ["-c", END_PROCESSES_SCRIPT], { env: { PATH: process.env.PATH, OWNER: "alice" } })
+    const script = spawn("sh", ["-c", END_PROCESSES_SCRIPT], {
+      env: { PATH: process.env.PATH, OWNER: "alice" },
+    })
     let out = ""
     script.stdout.on("data", d => (out += d))
     await new Promise(resolve => script.on("close", resolve))
     await wait(50)
     try {
       expect(out.split("\n").filter(Boolean)).toContain(String(alice.pid))
-      expect(alive(alice.pid) && !alice.killed && alice.exitCode === null && alice.signalCode === null).toBe(false)
+      expect(
+        alive(alice.pid) && !alice.killed && alice.exitCode === null && alice.signalCode === null,
+      ).toBe(false)
       expect(bob.exitCode === null && bob.signalCode === null).toBe(true)
       expect(bystander.exitCode === null && bystander.signalCode === null).toBe(true)
     } finally {

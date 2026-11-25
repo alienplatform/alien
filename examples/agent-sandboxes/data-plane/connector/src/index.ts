@@ -58,12 +58,18 @@ createServer((req, res) => {
     if (!res.headersSent) send(res, 502, { error: "internal API unreachable" })
   })
 }).listen(Number(process.env.PORT ?? 8080), "0.0.0.0", () => {
-  console.log(`connector listening on ${process.env.PORT ?? 8080}, internal API ${INTERNAL_API_URL}`)
+  console.log(
+    `connector listening on ${process.env.PORT ?? 8080}, internal API ${INTERNAL_API_URL}`,
+  )
 })
 
 function field(input: unknown, name: string): string {
-  const value = typeof input === "object" && input !== null ? (input as Record<string, unknown>)[name] : undefined
-  if (typeof value !== "string" || value === "") throw new TypeError(`${name} must be a non-empty string`)
+  const value =
+    typeof input === "object" && input !== null
+      ? (input as Record<string, unknown>)[name]
+      : undefined
+  if (typeof value !== "string" || value === "")
+    throw new TypeError(`${name} must be a non-empty string`)
   return value
 }
 
@@ -79,17 +85,28 @@ receiver.command("issue-token", async input => {
 
 receiver.command("approvals", async input => {
   const threadId =
-    typeof input === "object" && input !== null && "threadId" in input && typeof input.threadId === "string"
+    typeof input === "object" &&
+    input !== null &&
+    "threadId" in input &&
+    typeof input.threadId === "string"
       ? input.threadId
       : undefined
   return { pending: approvals.list(threadId) }
 })
 
-receiver.command("revoke-token", async input => ({ revoked: tokens.revoke(field(input, "threadId")) }))
+receiver.command("revoke-token", async input => ({
+  revoked: tokens.revoke(field(input, "threadId")),
+}))
 
 receiver.command("decide", async input => {
-  const approve = typeof input === "object" && input !== null && "approve" in input && input.approve === true
-  return connector.decide({ id: field(input, "id"), threadId: field(input, "threadId"), approve, by: field(input, "by") })
+  const approve =
+    typeof input === "object" && input !== null && "approve" in input && input.approve === true
+  return connector.decide({
+    id: field(input, "id"),
+    threadId: field(input, "threadId"),
+    approve,
+    by: field(input, "by"),
+  })
 })
 
 // A source-built container compiles to one CommonJS bundle, which forbids top-level await.

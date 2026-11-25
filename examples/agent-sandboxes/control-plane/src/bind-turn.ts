@@ -10,8 +10,13 @@
 
 import type { DataPlane } from "./data-plane"
 
-export async function bindTurn(dp: DataPlane, sandbox: { threadId: string; sandboxId: string }, user: string): Promise<void> {
+export async function bindTurn(
+  dp: DataPlane,
+  sandbox: { threadId: string; sandboxId: string },
+  user: string,
+): Promise<void> {
   const { token } = await dp.issueToken(sandbox.threadId, user)
   const binding = await dp.bindTurn(sandbox.sandboxId, token)
-  if (!binding.bound) throw new Error(`the sandbox was not bound to ${user}: ${binding.reason ?? "no reason given"}`)
+  if (!binding.bound)
+    throw new Error(`the sandbox was not bound to ${user}: ${binding.reason ?? "no reason given"}`)
 }

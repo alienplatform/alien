@@ -3,15 +3,23 @@ import type { AddressInfo } from "node:net"
 import { describe, expect, it } from "vitest"
 import { allowed } from "../data-plane/connector/src/access"
 import { Approvals } from "../data-plane/connector/src/approvals"
+import {
+  type ConnectorDeps,
+  createConnector,
+  isOrdersPath,
+  scannerPath,
+  TURN_ENDED,
+} from "../data-plane/connector/src/handler"
 import { scannerGet } from "../data-plane/connector/src/scanner"
-import { createConnector, isOrdersPath, scannerPath, TURN_ENDED, type ConnectorDeps } from "../data-plane/connector/src/handler"
 import { TurnTokens } from "../data-plane/connector/src/tokens"
 
 describe("turn tokens", () => {
   it("refuses the sandbox's placeholder and a missing header", () => {
     const tokens = new TurnTokens(60_000)
     expect(tokens.check(undefined)).toEqual({ error: "no turn credentials on this request" })
-    expect(tokens.check("Bearer placeholder")).toEqual({ error: "no turn credentials on this request" })
+    expect(tokens.check("Bearer placeholder")).toEqual({
+      error: "no turn credentials on this request",
+    })
   })
 
   it("maps a token to its thread and user", () => {
@@ -59,7 +67,13 @@ describe("access", () => {
 })
 
 describe("approvals", () => {
-  const write = { threadId: "t1", user: "alice", method: "PATCH", path: "/orders/1003", body: { status: "refunded" } }
+  const write = {
+    threadId: "t1",
+    user: "alice",
+    method: "PATCH",
+    path: "/orders/1003",
+    body: { status: "refunded" },
+  }
 
   it("holds a write until it is approved", async () => {
     const approvals = new Approvals(60_000)
@@ -101,7 +115,10 @@ describe("scanner", () => {
     await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve))
     const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
     try {
-      expect(await scannerGet(url, "customer-key", "/findings")).toEqual({ status: 200, body: { findings: [] } })
+      expect(await scannerGet(url, "customer-key", "/findings")).toEqual({
+        status: 200,
+        body: { findings: [] },
+      })
       expect(seen).toEqual(["Bearer customer-key"])
       expect((await scannerGet(url, "", "/findings")).status).toBe(503)
     } finally {
@@ -142,7 +159,8 @@ async function startConnector() {
   const write = (path: string, token: string) =>
     call(path, token, { method: "PATCH", body: JSON.stringify({ status: "refunded" }) })
   const held = async () => {
-    for (let i = 0; i < 200 && approvals.list().length === 0; i++) await new Promise(r => setTimeout(r, 5))
+    for (let i = 0; i < 200 && approvals.list().length === 0; i++)
+      await new Promise(r => setTimeout(r, 5))
     return approvals.list()[0]
   }
   return { tokens, approvals, connector, upstream, call, write, held, close: () => server.close() }
@@ -188,7 +206,9 @@ describe("connector requests", () => {
       expect(JSON.stringify(c.approvals.list())).not.toContain(token)
       await new Promise(r => setTimeout(r, 30))
       expect(c.upstream).toEqual([])
-      expect(c.connector.decide({ id: write.id, threadId: "t1", approve: true, by: "manager" })).toEqual({ decided: true })
+      expect(
+        c.connector.decide({ id: write.id, threadId: "t1", approve: true, by: "manager" }),
+      ).toEqual({ decided: true })
       const done = await response
       expect(done.status).toBe(200)
       expect(await done.json()).toMatchObject({ approvedBy: "manager" })
@@ -219,7 +239,9 @@ describe("connector requests", () => {
       const response = c.write("/orders/1003", alice)
       const write = await c.held()
       c.tokens.issue("t1", "bob") // the thread now belongs to bob
-      expect(c.connector.decide({ id: write.id, threadId: "t1", approve: true, by: "manager" })).toEqual({
+      expect(
+        c.connector.decide({ id: write.id, threadId: "t1", approve: true, by: "manager" }),
+      ).toEqual({
         decided: false,
         reason: TURN_ENDED,
       })
@@ -239,7 +261,9 @@ describe("connector requests", () => {
       const response = c.write("/orders/1003", token)
       const write = await c.held()
       c.tokens.revoke("t1")
-      expect(c.connector.decide({ id: write.id, threadId: "t1", approve: true, by: "manager" }).decided).toBe(false)
+      expect(
+        c.connector.decide({ id: write.id, threadId: "t1", approve: true, by: "manager" }).decided,
+      ).toBe(false)
       expect((await response).status).toBe(403)
       expect(c.upstream).toEqual([])
     } finally {
@@ -278,7 +302,8 @@ describe("who may approve", () => {
   it("not the user who asked, not a user without approve rights, not an unknown user", async () => {
     const { c, write, response } = await held()
     try {
-      const decide = (by: string) => c.connector.decide({ id: write.id, threadId: "t1", approve: true, by })
+      const decide = (by: string) =>
+        c.connector.decide({ id: write.id, threadId: "t1", approve: true, by })
       expect(decide("alice").decided).toBe(false) // asked for it, and has no approve right
       expect(decide("bob").reason).toBe("bob may not approve writes")
       expect(decide("carol").reason).toBe("carol may not approve writes")
@@ -296,10 +321,13 @@ describe("who may approve", () => {
       // A user with both rights would still not approve their own write.
       const { token } = c.tokens.issue("t1", "manager")
       const approvalsOf = c.approvals
-      const { write } = approvalsOf.hold({ threadId: "t1", user: "manager", method: "PATCH", path: "/orders/1", body: {} }, token)
-      expect(c.connector.decide({ id: write.id, threadId: "t1", approve: true, by: "manager" }).reason).toBe(
-        "the user who asked cannot approve their own write",
+      const { write } = approvalsOf.hold(
+        { threadId: "t1", user: "manager", method: "PATCH", path: "/orders/1", body: {} },
+        token,
       )
+      expect(
+        c.connector.decide({ id: write.id, threadId: "t1", approve: true, by: "manager" }).reason,
+      ).toBe("the user who asked cannot approve their own write")
     } finally {
       c.close()
     }
@@ -308,7 +336,9 @@ describe("who may approve", () => {
   it("a decision under the wrong thread is refused", async () => {
     const { c, write } = await held()
     try {
-      expect(c.connector.decide({ id: write.id, threadId: "t2", approve: true, by: "manager" })).toEqual({
+      expect(
+        c.connector.decide({ id: write.id, threadId: "t2", approve: true, by: "manager" }),
+      ).toEqual({
         decided: false,
         reason: "that write belongs to another thread",
       })
@@ -321,7 +351,9 @@ describe("who may approve", () => {
   it("a write that is gone is reported as gone", async () => {
     const c = await startConnector()
     try {
-      expect(c.connector.decide({ id: "nope", threadId: "t1", approve: true, by: "manager" }).decided).toBe(false)
+      expect(
+        c.connector.decide({ id: "nope", threadId: "t1", approve: true, by: "manager" }).decided,
+      ).toBe(false)
     } finally {
       c.close()
     }

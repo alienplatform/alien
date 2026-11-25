@@ -130,7 +130,9 @@ describe("thread router", () => {
     const router = new ThreadRouter(dp, store, { idlePauseMs: 60_000, pollMs: 1 })
     const thread = router.create("Orders", "alice")
 
-    await expect(router.send(thread.id, "alice", "hello")).rejects.toThrow("gateway did not acknowledge")
+    await expect(router.send(thread.id, "alice", "hello")).rejects.toThrow(
+      "gateway did not acknowledge",
+    )
     expect(calls.some(c => c.startsWith("turn"))).toBe(false)
     expect(store.get(thread.id)?.state).toBe("idle")
     // The token that was issued does not outlive the failed start.
@@ -146,7 +148,9 @@ describe("thread router", () => {
     const seen: UiEvent[] = []
     router.subscribe(thread.id, e => seen.push(e))
 
-    await expect(router.send(thread.id, "alice", "hello")).rejects.toThrow("not bound to alice: no credentials API")
+    await expect(router.send(thread.id, "alice", "hello")).rejects.toThrow(
+      "not bound to alice: no credentials API",
+    )
     expect(calls.some(c => c.startsWith("turn"))).toBe(false)
     expect(seen).toContainEqual({
       type: "notice",
@@ -162,7 +166,9 @@ describe("thread router", () => {
 
     await router.send(thread.id, "alice", "hello")
     await until(() => store.get(thread.id)?.state === "idle")
-    expect(calls.indexOf(`end-turn ${thread.id} sbx-1`)).toBeGreaterThan(calls.indexOf("turn sbx-1 - alice"))
+    expect(calls.indexOf(`end-turn ${thread.id} sbx-1`)).toBeGreaterThan(
+      calls.indexOf("turn sbx-1 - alice"),
+    )
   })
 
   it("a user switch ends the previous user's processes before binding; the same user keeps them", async () => {
@@ -184,7 +190,10 @@ describe("thread router", () => {
     expect(calls.filter(c => c.startsWith("end-processes"))).toEqual(["end-processes sbx-1 alice"])
     const ended = calls.indexOf("end-processes sbx-1 alice")
     expect(ended).toBeLessThan(calls.indexOf(`issue-token ${thread.id} bob`))
-    expect(seen).toContainEqual({ type: "notice", text: "ended 2 processes that alice's turns left running" })
+    expect(seen).toContainEqual({
+      type: "notice",
+      text: "ended 2 processes that alice's turns left running",
+    })
   })
 
   it("a message that arrives during a pause waits for it, then resumes the sandbox", async () => {

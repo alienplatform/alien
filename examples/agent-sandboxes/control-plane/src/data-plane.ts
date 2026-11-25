@@ -29,7 +29,13 @@ export interface DataPlane {
   open(threadId: string, sandboxId?: string): Promise<OpenResult>
   issueToken(threadId: string, user: string): Promise<{ token: string; expiresAt: number }>
   bindTurn(sandboxId: string, token: string): Promise<{ bound: boolean; reason?: string }>
-  turn(input: { threadId: string; sandboxId: string; sessionId?: string; user: string; text: string }): Promise<void>
+  turn(input: {
+    threadId: string
+    sandboxId: string
+    sessionId?: string
+    user: string
+    text: string
+  }): Promise<void>
   events(threadId: string, after: number, waitMs: number): Promise<EventsResult>
   /** Ends the turn's access: the connector forgets the thread's token and the sandbox's rules are removed. */
   endTurn(threadId: string, sandboxId: string): Promise<void>
@@ -50,7 +56,11 @@ export interface Decided {
   reason?: string
 }
 
-export function commandsDataPlane(config: { managerUrl: string; deploymentId: string; token: string }): DataPlane {
+export function commandsDataPlane(config: {
+  managerUrl: string
+  deploymentId: string
+  token: string
+}): DataPlane {
   const client = new CommandsClient({ ...config, timeoutMs: 120_000 })
   const runner = client.target("runner")
   const connector = client.target("connector")
@@ -61,7 +71,8 @@ export function commandsDataPlane(config: { managerUrl: string; deploymentId: st
     turn: async input => {
       await runner.invoke("turn", input)
     },
-    events: (threadId, after, waitMs) => runner.invoke<EventsResult>("events", { threadId, after, waitMs }),
+    events: (threadId, after, waitMs) =>
+      runner.invoke<EventsResult>("events", { threadId, after, waitMs }),
     endTurn: async (threadId, sandboxId) => {
       await Promise.all([
         connector.invoke("revoke-token", { threadId }),

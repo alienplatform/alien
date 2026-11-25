@@ -70,7 +70,8 @@ export function createConnector(deps: ConnectorDeps) {
     const scanner = scannerPath(url.pathname)
     if (scanner) {
       if (req.method !== "GET") return send(res, 405, { error: "the scanner is read only" })
-      if (!allowed(user, "scanner:read")) return send(res, 403, { error: `${user} may not read scanner findings` })
+      if (!allowed(user, "scanner:read"))
+        return send(res, 403, { error: `${user} may not read scanner findings` })
       const result = await deps.scanner(scanner + url.search)
       log(`${user} read scanner ${scanner}: ${result.status}`)
       return send(res, result.status, result.body)
@@ -78,7 +79,8 @@ export function createConnector(deps: ConnectorDeps) {
     if (!isOrdersPath(url.pathname)) return send(res, 404, { error: "not found" })
 
     if (req.method === "GET") {
-      if (!allowed(user, "orders:read")) return send(res, 403, { error: `${user} may not read orders` })
+      if (!allowed(user, "orders:read"))
+        return send(res, 403, { error: `${user} may not read orders` })
       const result = await deps.internal("GET", url.pathname)
       log(`${user} read ${url.pathname}: ${result.status}`)
       return send(res, result.status, result.body)
@@ -96,7 +98,10 @@ export function createConnector(deps: ConnectorDeps) {
       } catch {
         return send(res, 400, { error: "body must be JSON" })
       }
-      const { write, decision } = approvals.hold({ threadId, user, method: "PATCH", path: url.pathname, body }, grant.token)
+      const { write, decision } = approvals.hold(
+        { threadId, user, method: "PATCH", path: url.pathname, body },
+        grant.token,
+      )
       log(`holding ${user} write ${url.pathname} as ${write.id}`)
       const outcome = await decision
       if (!outcome.approved) {
@@ -126,8 +131,10 @@ export function createConnector(deps: ConnectorDeps) {
   function decide(input: Decision): { decided: boolean; reason?: string } {
     const held = approvals.get(input.id)
     if (!held) return { decided: false, reason: "that write is no longer waiting" }
-    if (held.write.threadId !== input.threadId) return { decided: false, reason: "that write belongs to another thread" }
-    if (!allowed(input.by, "orders:approve")) return { decided: false, reason: `${input.by} may not approve writes` }
+    if (held.write.threadId !== input.threadId)
+      return { decided: false, reason: "that write belongs to another thread" }
+    if (!allowed(input.by, "orders:approve"))
+      return { decided: false, reason: `${input.by} may not approve writes` }
     if (input.by === held.write.user) {
       return { decided: false, reason: "the user who asked cannot approve their own write" }
     }

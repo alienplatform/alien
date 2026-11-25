@@ -45,7 +45,10 @@ app.post("/api/threads/:id/messages", async c => {
     await router.send(c.req.param("id"), body.user, body.text)
     return c.json({ started: true })
   } catch (error) {
-    return c.json({ error: error instanceof Error ? error.message : String(error) }, error instanceof BusyError ? 409 : 502)
+    return c.json(
+      { error: error instanceof Error ? error.message : String(error) },
+      error instanceof BusyError ? 409 : 502,
+    )
   }
 })
 
@@ -55,13 +58,18 @@ app.post("/api/threads/:id/exec", async c => {
     await router.exec(c.req.param("id"), body.command)
     return c.json({ ok: true })
   } catch (error) {
-    return c.json({ error: error instanceof Error ? error.message : String(error) }, error instanceof BusyError ? 409 : 502)
+    return c.json(
+      { error: error instanceof Error ? error.message : String(error) },
+      error instanceof BusyError ? 409 : 502,
+    )
   }
 })
 
 app.post("/api/threads/:id/approvals/:approval", async c => {
   const body = await c.req.json<{ approve: boolean; by: string }>()
-  return c.json(await router.decide(c.req.param("id"), c.req.param("approval"), body.approve, body.by))
+  return c.json(
+    await router.decide(c.req.param("id"), c.req.param("approval"), body.approve, body.by),
+  )
 })
 
 app.get("/api/threads/:id/events", c => {

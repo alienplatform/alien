@@ -7,7 +7,11 @@ export type RunnerEvent =
   | { seq: number; kind: "stderr"; text: string }
   | { seq: number; kind: "turn-end"; turnId: string; exitCode: number | null; error?: string }
 
-export type NewEvent = RunnerEvent extends infer E ? (E extends RunnerEvent ? Omit<E, "seq"> : never) : never
+export type NewEvent = RunnerEvent extends infer E
+  ? E extends RunnerEvent
+    ? Omit<E, "seq">
+    : never
+  : never
 
 const MAX_EVENTS = 2000
 
@@ -92,7 +96,10 @@ export function pauseWhenIdle(
   return t.lock.run(async () => {
     if (t.running) throw new Error("a turn is running; pause after it ends")
     if (!(await canPause())) {
-      return { paused: false, reason: "this platform keeps sandboxes running instead of pausing them" }
+      return {
+        paused: false,
+        reason: "this platform keeps sandboxes running instead of pausing them",
+      }
     }
     await pause()
     return { paused: true }

@@ -19,7 +19,10 @@ export type Decision =
   | { approved: false; by: string; reason: string }
 
 export class Approvals {
-  private pending = new Map<string, { write: PendingWrite; token: string; settle: (d: Decision) => void }>()
+  private pending = new Map<
+    string,
+    { write: PendingWrite; token: string; settle: (d: Decision) => void }
+  >()
 
   constructor(private readonly timeoutMs: number) {}
 
@@ -27,7 +30,10 @@ export class Approvals {
    * Holds a write until `decide` or the timeout, whichever comes first. `token` is the turn
    * token the request came with; it stays here, never in the list the control plane reads.
    */
-  hold(write: Omit<PendingWrite, "id" | "requestedAt">, token: string): { write: PendingWrite; decision: Promise<Decision> } {
+  hold(
+    write: Omit<PendingWrite, "id" | "requestedAt">,
+    token: string,
+  ): { write: PendingWrite; decision: Promise<Decision> } {
     const full: PendingWrite = { ...write, id: randomUUID(), requestedAt: new Date().toISOString() }
     const decision = new Promise<Decision>(resolve => {
       const timer = setTimeout(() => {

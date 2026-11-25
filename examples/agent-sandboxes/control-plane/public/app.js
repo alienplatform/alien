@@ -5,7 +5,16 @@ let current = null
 let source = null
 
 async function api(path, body) {
-  const response = await fetch(path, body ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : {})
+  const response = await fetch(
+    path,
+    body
+      ? {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+        }
+      : {},
+  )
   const json = await response.json()
   if (!response.ok) throw new Error(json.error || response.statusText)
   return json
@@ -24,12 +33,15 @@ function showAgent(event) {
   if (event.type === "assistant") {
     for (const block of event.message?.content ?? []) {
       if (block.type === "text" && block.text.trim()) line("assistant", block.text)
-      if (block.type === "tool_use") line("tool", `$ ${block.input?.command ?? JSON.stringify(block.input)}`)
+      if (block.type === "tool_use")
+        line("tool", `$ ${block.input?.command ?? JSON.stringify(block.input)}`)
     }
   } else if (event.type === "user") {
     for (const block of event.message?.content ?? []) {
       if (block.type === "tool_result") {
-        const text = Array.isArray(block.content) ? block.content.map(c => c.text ?? "").join("") : String(block.content ?? "")
+        const text = Array.isArray(block.content)
+          ? block.content.map(c => c.text ?? "").join("")
+          : String(block.content ?? "")
         line("tool", text.slice(0, 2000))
       }
     }
@@ -50,10 +62,18 @@ function showApprovals(pending) {
     text.textContent = `${write.user} wants ${write.method} ${write.path} ${JSON.stringify(write.body)}`
     const approve = document.createElement("button")
     approve.textContent = "Approve"
-    approve.onclick = () => api(`/api/threads/${current}/approvals/${write.id}`, { approve: true, by: $("approver").value }).catch(e => line("notice", e.message))
+    approve.onclick = () =>
+      api(`/api/threads/${current}/approvals/${write.id}`, {
+        approve: true,
+        by: $("approver").value,
+      }).catch(e => line("notice", e.message))
     const deny = document.createElement("button")
     deny.textContent = "Deny"
-    deny.onclick = () => api(`/api/threads/${current}/approvals/${write.id}`, { approve: false, by: $("approver").value }).catch(e => line("notice", e.message))
+    deny.onclick = () =>
+      api(`/api/threads/${current}/approvals/${write.id}`, {
+        approve: false,
+        by: $("approver").value,
+      }).catch(e => line("notice", e.message))
     div.append(text, approve, deny)
     box.append(div)
   }
@@ -63,9 +83,12 @@ function show(event) {
   if (event.type === "user") line("user", `${event.user}: ${event.text}`)
   else if (event.type === "agent") showAgent(event.event)
   else if (event.type === "notice") line("notice", event.text)
-  else if (event.type === "state") { $("state").textContent = event.state; loadThreads() }
-  else if (event.type === "approvals") showApprovals(event.pending)
-  else if (event.type === "exec") line("exec", `$ ${event.command}\n${event.stdout}${event.stderr}[exit ${event.exitCode}]`)
+  else if (event.type === "state") {
+    $("state").textContent = event.state
+    loadThreads()
+  } else if (event.type === "approvals") showApprovals(event.pending)
+  else if (event.type === "exec")
+    line("exec", `$ ${event.command}\n${event.stdout}${event.stderr}[exit ${event.exitCode}]`)
 }
 
 async function loadThreads() {
@@ -106,7 +129,11 @@ $("send").onsubmit = async event => {
   if (!current || !$("text").value) return
   const text = $("text").value
   $("text").value = ""
-  try { await api(`/api/threads/${current}/messages`, { user: $("user").value, text }) } catch (e) { line("notice", e.message) }
+  try {
+    await api(`/api/threads/${current}/messages`, { user: $("user").value, text })
+  } catch (e) {
+    line("notice", e.message)
+  }
 }
 
 $("exec").onsubmit = async event => {
@@ -114,7 +141,11 @@ $("exec").onsubmit = async event => {
   if (!current || !$("command").value) return
   const command = $("command").value
   $("command").value = ""
-  try { await api(`/api/threads/${current}/exec`, { command }) } catch (e) { line("notice", e.message) }
+  try {
+    await api(`/api/threads/${current}/exec`, { command })
+  } catch (e) {
+    line("notice", e.message)
+  }
 }
 
 loadThreads()

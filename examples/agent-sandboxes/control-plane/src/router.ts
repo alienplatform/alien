@@ -73,7 +73,8 @@ export class ThreadRouter {
   /** Opens the thread's sandbox, resuming it if it was paused. */
   private async open(thread: Thread): Promise<Thread> {
     const opened = await this.dp.open(thread.id, thread.sandboxId)
-    if (opened.resumed) this.emit(thread.id, { type: "notice", text: `resumed sandbox ${opened.sandboxId}` })
+    if (opened.resumed)
+      this.emit(thread.id, { type: "notice", text: `resumed sandbox ${opened.sandboxId}` })
     if (opened.created) {
       this.emit(thread.id, { type: "notice", text: `created sandbox ${opened.sandboxId}` })
       return this.store.update(thread.id, { sandboxId: opened.sandboxId, sessionId: undefined })
@@ -89,7 +90,8 @@ export class ThreadRouter {
       if (thread.state === "running") throw new BusyError("this thread is already answering")
       this.clearIdle(threadId)
       const previousUser = thread.user
-      if (previousUser !== user) this.emit(threadId, { type: "notice", text: `user switched to ${user}` })
+      if (previousUser !== user)
+        this.emit(threadId, { type: "notice", text: `user switched to ${user}` })
       this.store.update(threadId, { user })
       this.emit(threadId, { type: "user", user, text })
       this.setState(threadId, "running")
@@ -136,11 +138,14 @@ export class ThreadRouter {
         let ended = false
         for (const event of result.events) {
           this.cursors.set(threadId, event.seq)
-          if (event.kind === "agent") this.emit(threadId, { type: "agent", event: event.event as Record<string, unknown> })
-          else if (event.kind === "stderr") this.emit(threadId, { type: "stderr", text: String(event.text) })
+          if (event.kind === "agent")
+            this.emit(threadId, { type: "agent", event: event.event as Record<string, unknown> })
+          else if (event.kind === "stderr")
+            this.emit(threadId, { type: "stderr", text: String(event.text) })
           else if (event.kind === "turn-end") {
             ended = true
-            if (event.error) this.emit(threadId, { type: "notice", text: `turn failed: ${event.error}` })
+            if (event.error)
+              this.emit(threadId, { type: "notice", text: `turn failed: ${event.error}` })
           }
         }
         if (result.sessionId) this.store.update(threadId, { sessionId: result.sessionId })
@@ -160,7 +165,10 @@ export class ThreadRouter {
       try {
         await this.dp.endTurn(threadId, sandboxId)
       } catch (error) {
-        this.emit(threadId, { type: "notice", text: `could not end the turn's access: ${message(error)}` })
+        this.emit(threadId, {
+          type: "notice",
+          text: `could not end the turn's access: ${message(error)}`,
+        })
       }
     }
     this.setState(threadId, "idle")
@@ -191,7 +199,10 @@ export class ThreadRouter {
         const result = await this.dp.pause(threadId, thread.sandboxId)
         if (result.paused) {
           this.setState(threadId, "paused")
-          this.emit(threadId, { type: "notice", text: `paused sandbox ${thread.sandboxId} after idling` })
+          this.emit(threadId, {
+            type: "notice",
+            text: `paused sandbox ${thread.sandboxId} after idling`,
+          })
         } else {
           this.emit(threadId, { type: "notice", text: `not paused: ${result.reason}` })
         }

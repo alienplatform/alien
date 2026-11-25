@@ -54,7 +54,8 @@ function obj(input: unknown): Record<string, unknown> {
 }
 function str(input: Record<string, unknown>, name: string): string {
   const value = input[name]
-  if (typeof value !== "string" || value === "") throw new TypeError(`${name} must be a non-empty string`)
+  if (typeof value !== "string" || value === "")
+    throw new TypeError(`${name} must be a non-empty string`)
   return value
 }
 function optStr(input: Record<string, unknown>, name: string): string | undefined {
@@ -72,10 +73,14 @@ const WORKSPACE_DIR = "workspace"
 // Gives a new sandbox its working directory and its instructions file.
 async function prepareWorkspace(sandboxId: string) {
   for await (const frame of agent.runCommand(sandboxId, "sh", {
-    args: ["-c", `mkdir -p ${WORKSPACE} ${HOME_DIR} ${TMP_DIR} && cp /opt/agent/CLAUDE.md ${WORKSPACE}/CLAUDE.md`],
+    args: [
+      "-c",
+      `mkdir -p ${WORKSPACE} ${HOME_DIR} ${TMP_DIR} && cp /opt/agent/CLAUDE.md ${WORKSPACE}/CLAUDE.md`,
+    ],
     timeoutMs: 30_000,
   })) {
-    if (frame.kind === "exit" && frame.exitCode !== 0) throw new Error("preparing the workspace failed")
+    if (frame.kind === "exit" && frame.exitCode !== 0)
+      throw new Error("preparing the workspace failed")
   }
 }
 
@@ -106,17 +111,28 @@ async function agentEnv(user: string): Promise<Record<string, string>> {
   }
 }
 
-async function runTurn(t: ThreadEvents, sandboxId: string, sessionId: string | undefined, user: string, text: string) {
+async function runTurn(
+  t: ThreadEvents,
+  sandboxId: string,
+  sessionId: string | undefined,
+  user: string,
+  text: string,
+) {
   const turnId = randomUUID()
   t.push({ kind: "turn-start", turnId, user })
   const args = [
     "-p",
-    "--input-format", "stream-json",
-    "--output-format", "stream-json",
+    "--input-format",
+    "stream-json",
+    "--output-format",
+    "stream-json",
     "--verbose",
-    "--model", MODEL,
-    "--permission-mode", "acceptEdits",
-    "--allowedTools", "Bash,Read,Write,Edit,Glob,Grep",
+    "--model",
+    MODEL,
+    "--permission-mode",
+    "acceptEdits",
+    "--allowedTools",
+    "Bash,Read,Write,Edit,Glob,Grep",
     ...(sessionId ? ["--resume", sessionId] : []),
   ]
   let exitCode: number | null = null
@@ -137,7 +153,11 @@ async function runTurn(t: ThreadEvents, sandboxId: string, sessionId: string | u
     const onLine = (line: string) => {
       try {
         const event = JSON.parse(line) as Record<string, unknown>
-        if (event.type === "system" && event.subtype === "init" && typeof event.session_id === "string") {
+        if (
+          event.type === "system" &&
+          event.subtype === "init" &&
+          typeof event.session_id === "string"
+        ) {
           t.sessionId = event.session_id
         }
         t.push({ kind: "agent", event })
@@ -147,7 +167,10 @@ async function runTurn(t: ThreadEvents, sandboxId: string, sessionId: string | u
     }
     for await (const frame of proc) {
       if (frame.kind === "stdout") out.feed(frame.data.toString("utf8")).forEach(onLine)
-      else if (frame.kind === "stderr") err.feed(frame.data.toString("utf8")).forEach(text => t.push({ kind: "stderr", text }))
+      else if (frame.kind === "stderr")
+        err.feed(frame.data.toString("utf8")).forEach(text => {
+          t.push({ kind: "stderr", text })
+        })
       else if (frame.kind === "exit") exitCode = frame.exitCode
     }
     out.flush().forEach(onLine)
@@ -186,7 +209,8 @@ receiver.command("open", async input => {
         await agent.resume(known)
         return { sandboxId: known, created: false, resumed: true }
       }
-      if (found && found.state !== "terminated") return { sandboxId: known, created: false, resumed: false }
+      if (found && found.state !== "terminated")
+        return { sandboxId: known, created: false, resumed: false }
     }
     const created = await agent.create()
     sandboxOf.set(threadId, created.sandboxId)
@@ -224,7 +248,8 @@ receiver.command("end-processes", async input => {
     env: { OWNER: user },
     timeoutMs: 30_000,
   })) {
-    if (frame.kind === "stdout") ended.push(...frame.data.toString("utf8").split("\n").filter(Boolean))
+    if (frame.kind === "stdout")
+      ended.push(...frame.data.toString("utf8").split("\n").filter(Boolean))
   }
   return { ended: ended.length }
 })

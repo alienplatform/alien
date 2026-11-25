@@ -28,7 +28,7 @@
 </head>
 <body>
 <aside>
-  <button id="new">New thread</button>
+  <button type="button" id="new">New thread</button>
   <div id="threads"></div>
 </aside>
 <main>
@@ -45,8 +45,8 @@
   <div id="log"></div>
   <div id="approvals"></div>
   <div>
-    <form id="send"><input type="text" id="text" placeholder="Message the agent" autocomplete="off"><button>Send</button></form>
-    <form id="exec"><input type="text" id="command" placeholder="Run in sandbox, e.g. env | sort" autocomplete="off"><button>Run</button></form>
+    <form id="send"><input type="text" id="text" placeholder="Message the agent" autocomplete="off"><button type="submit">Send</button></form>
+    <form id="exec"><input type="text" id="command" placeholder="Run in sandbox, e.g. env | sort" autocomplete="off"><button type="submit">Run</button></form>
   </div>
 </main>
 <script src="/app.js"></script>
