@@ -4,7 +4,7 @@
 // process and Claude Code keeps its conversation on disk. So the switch ends every process in
 // the sandbox that belongs to the sandbox user: the user the sweep itself runs as. Processes of
 // other users (the runtime's own, which the sandbox starts as root) are not the agent's and stay,
-// as do PID 1, the processes that started the sweep itself, and kernel threads (no command
+// as do PID 1, the sweep's own command (the shell that runs it and what that shell started), and kernel threads (no command
 // line). The owner comes from the kernel (the Uid line of /proc/<pid>/status), which the agent
 // cannot change; the sweep does not look at anything else the agent controls, such as
 // environment variables or process names.
@@ -36,6 +36,15 @@ while [ -n "$p" ] && [ "$p" != 0 ]; do
   p=$(ppid_of "$p")
 done
 
+# The command that started the sweep (the runtime wraps every command in a shell with a watchdog
+# beside it) is the topmost ancestor below PID 1: everything under it is the sweep's own.
+top=$self
+p=$(ppid_of "$self")
+while [ -n "$p" ] && [ "$p" != 0 ] && [ "$p" != 1 ]; do
+  top=$p
+  p=$(ppid_of "$p")
+done
+
 # Prints the pids that are left to end.
 candidates() {
   for d in /proc/[0-9]*; do
@@ -45,11 +54,12 @@ candidates() {
     [ -n "$(tr -d '\000' < "$d/cmdline" 2>/dev/null)" ] || continue
     # Only the sandbox user's processes (the real uid, set by the kernel).
     [ "$(sed -n 's/^Uid:[[:space:]]*\([0-9]*\).*/\1/p' "$d/status" 2>/dev/null)" = "$me" ] || continue
-    # Things this script started itself (ls, tr, sed) are not the sandbox's.
+    # Things the sweep's own command started (ls, tr, sed, the runtime's watchdog) are not the
+    # sandbox's.
     p=$pid
     ours=
     while [ -n "$p" ] && [ "$p" != 0 ] && [ "$p" != 1 ]; do
-      [ "$p" = "$self" ] && ours=1 && break
+      [ "$p" = "$top" ] && ours=1 && break
       p=$(ppid_of "$p")
     done
     [ -n "$ours" ] && continue

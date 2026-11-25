@@ -130,6 +130,38 @@ describe("ending what a thread left running", () => {
   )
 })
 
+describe("the sweep's own command wrapper", () => {
+  const ns = spawnSync("unshare", [
+    "--user",
+    "--map-user=1000",
+    "--pid",
+    "--fork",
+    "--mount-proc",
+    "true",
+  ])
+  // The runtime starts every command in a shell with a watchdog subshell (and its sleep) beside
+  // the command; those belong to the sweep's own command, so the listing afterwards is empty.
+  it.skipIf(ns.status !== 0)("is not counted as left over", () => {
+    const result = spawnSync(
+      "unshare",
+      [
+        "--user",
+        "--map-user=1000",
+        "--pid",
+        "--fork",
+        "--mount-proc",
+        "sh",
+        "-c",
+        'sleep 600 & sleep 0.2; sh -c \'( sleep 31 & wait ) & sh -c "$SWEEP" sweep sweep > /tmp/e.$$; sh -c "$SWEEP" sweep list > /tmp/l.$$; echo "ended: $(wc -l < /tmp/e.$$)"; echo "left: $(wc -l < /tmp/l.$$)"; rm -f /tmp/e.$$ /tmp/l.$$; kill $(jobs -p) 2>/dev/null\'',
+        "outer",
+      ],
+      { encoding: "utf8", env: { PATH: process.env.PATH, SWEEP: SWEEP_SCRIPT } },
+    )
+    expect(result.stdout).toContain("ended: 1")
+    expect(result.stdout).toContain("left: 0")
+  })
+})
+
 describe("the sweep as root", () => {
   const ns = spawnSync("unshare", [
     "--user",
