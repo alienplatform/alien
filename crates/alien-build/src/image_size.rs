@@ -118,6 +118,9 @@ fn apply_layer(archive: &Path, name: &str, files: &mut BTreeMap<String, u64>) ->
 }
 
 fn read_layer(layer: impl Read, files: &mut BTreeMap<String, u64>) -> io::Result<()> {
+    // Whiteouts hide earlier layers only, whatever order the archive lists them in, so this
+    // layer's own files are collected apart and merged once the layer has been read.
+    let mut added = BTreeMap::new();
     let mut tar = tar::Archive::new(layer);
     for entry in tar.entries()? {
         let entry = entry?;
@@ -142,15 +145,16 @@ fn read_layer(layer: impl Read, files: &mut BTreeMap<String, u64>) -> io::Result
             files.remove(&target);
             remove_under(files, &target);
         } else if entry.header().entry_type().is_file() {
-            files.insert(
+            added.insert(
                 path,
                 entry.header().size()?.div_ceil(BLOCK_BYTES) * BLOCK_BYTES,
             );
         } else if !entry.header().entry_type().is_dir() {
             // A link or special file occupies the name but no data.
-            files.insert(path, 0);
+            added.insert(path, 0);
         }
     }
+    files.extend(added);
     Ok(())
 }
 
@@ -240,6 +244,16 @@ mod tests {
             layer(&[("etc/.wh..wh..opq", 0), ("etc/new", 10)], true),
         ]);
         assert_eq!(uncompressed_size(file.path()), Some(4096 * 2));
+    }
+
+    /// An opaque marker hides earlier layers only: files the same layer lists before it stay.
+    #[test]
+    fn an_opaque_marker_keeps_files_its_own_layer_lists_first() {
+        let file = archive(vec![
+            layer(&[("etc/old", 5000)], true),
+            layer(&[("etc/new", 10), ("etc/.wh..wh..opq", 0)], true),
+        ]);
+        assert_eq!(uncompressed_size(file.path()), Some(4096));
     }
 
     /// dockdash writes zstd layers by default, so they are the common case.

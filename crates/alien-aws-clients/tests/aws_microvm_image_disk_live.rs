@@ -20,7 +20,7 @@ use alien_aws_clients::aws::lambda_microvms::{
     CreateMicrovmImageRequest, LambdaMicrovmsApi, LambdaMicrovmsClient, MicrovmCodeArtifact,
     MicrovmCpuConfiguration, MicrovmImageResources,
 };
-use alien_aws_clients::s3::{PutObjectRequest, S3Api, S3Client};
+use alien_aws_clients::s3::{ObjectIdentifier, PutObjectRequest, S3Api, S3Client};
 use alien_aws_clients::{AwsClientConfig, AwsCredentialProvider, AwsCredentials};
 use reqwest::Client;
 
@@ -132,11 +132,34 @@ async fn probe(
             _ => tokio::time::sleep(Duration::from_secs(10)).await,
         }
     }
+    let mut image_deleted = false;
     for _ in 0..60 {
         if lambda.delete_microvm_image(&arn).await.is_ok() {
+            image_deleted = true;
             break;
         }
         tokio::time::sleep(Duration::from_secs(20)).await;
+    }
+    let bundle_deleted = s3
+        .delete_objects(
+            &bucket,
+            &[ObjectIdentifier::builder().key(key.clone()).build()],
+            true,
+        )
+        .await
+        .is_ok();
+    let mut leftovers = Vec::new();
+    if !image_deleted {
+        leftovers.push(format!("image {name}"));
+    }
+    if !bundle_deleted {
+        leftovers.push(format!("bundle s3://{bucket}/{key}"));
+    }
+    if !leftovers.is_empty() {
+        verdict.push_str(&format!(
+            " (CLEANUP FAILED, delete by hand: {})",
+            leftovers.join(", ")
+        ));
     }
     format!("{image} :: {verdict}")
 }

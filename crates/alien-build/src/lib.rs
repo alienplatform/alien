@@ -2779,6 +2779,8 @@ async fn prepare_prebuilt_sandbox(
         aws_connector,
     )
     .await?;
+    sandbox.image_size_bytes = built_image_size(Path::new(&directory), &targets).await;
+    warn_if_over_microvm_disk(&sandbox, platform);
     // A local sandbox keeps its build directory: the local sandbox manager loads the archive
     // into the daemon the way it does for a local Container, and creates sessions from the id
     // the daemon reports, so no id has to be predicted here.
