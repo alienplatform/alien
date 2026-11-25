@@ -114,7 +114,10 @@ fn read_layer(layer: impl Read, files: &mut BTreeMap<String, u64>) -> io::Result
     for entry in tar.entries()? {
         let entry = entry?;
         let path = entry.path()?.to_string_lossy().into_owned();
-        let path = path.trim_start_matches("./").trim_end_matches('/').to_string();
+        let path = path
+            .trim_start_matches("./")
+            .trim_end_matches('/')
+            .to_string();
         let (directory, base) = match path.rsplit_once('/') {
             Some((directory, base)) => (directory.to_string(), base.to_string()),
             None => (String::new(), path.clone()),

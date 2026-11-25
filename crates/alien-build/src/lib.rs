@@ -3,9 +3,9 @@ pub(crate) mod command_output;
 mod commands_receiver;
 pub mod dependencies;
 mod dockerignore;
-mod image_size;
 pub mod error;
 pub mod gcp_sandbox_image;
+mod image_size;
 mod lambda_image;
 #[cfg(test)]
 mod lambda_tests;
@@ -4722,10 +4722,7 @@ async fn compute_function_content_hash(dir: &Path) -> Result<String> {
 
 /// The largest uncompressed size across the built architectures, or `None` when any cannot be
 /// measured: the size is only recorded when it is known for every target.
-async fn built_image_size(
-    directory: &Path,
-    targets: &[alien_core::BinaryTarget],
-) -> Option<u64> {
+async fn built_image_size(directory: &Path, targets: &[alien_core::BinaryTarget]) -> Option<u64> {
     let paths: Vec<_> = targets
         .iter()
         .map(|target| directory.join(format!("{}.oci.tar", target.runtime_platform_id())))

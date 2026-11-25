@@ -3053,7 +3053,10 @@ mod tests {
 
     fn with_limits(memory: &str, cpu: &str, disk: &str) -> Sandbox {
         let mut sandbox = sandbox_with(SandboxEgress::None, vec![]);
-        let limits = sandbox.limits.as_mut().expect("the fixture declares limits");
+        let limits = sandbox
+            .limits
+            .as_mut()
+            .expect("the fixture declares limits");
         limits.memory = memory.to_string();
         limits.cpu = cpu.to_string();
         limits.disk = disk.to_string();
@@ -3088,18 +3091,25 @@ mod tests {
         assert!(text.contains("6042Mi"), "image size: {text}");
         assert!(text.contains("8Gi disk"), "disk of the chosen size: {text}");
         assert!(text.contains("16384Mi disk"), "limits to raise: {text}");
-        assert!(text.contains("16384Mi memory") && text.contains("8 cpu"), "{text}");
+        assert!(
+            text.contains("16384Mi memory") && text.contains("8 cpu"),
+            "{text}"
+        );
     }
 
     /// Under the line the build proceeds; the default size, with no limits declared, is checked too.
     #[test]
     fn an_image_under_the_line_passes_and_the_default_size_is_checked() {
         let sandbox = with_limits("4Gi", "2", "10Gi");
-        sandbox.check_microvm_image_fits(1024 * MIB).expect("1 GiB fits");
+        sandbox
+            .check_microvm_image_fits(1024 * MIB)
+            .expect("1 GiB fits");
 
         let mut undeclared = sandbox_with(SandboxEgress::None, vec![]);
         undeclared.limits = None;
-        undeclared.check_microvm_image_fits(1024 * MIB).expect("fits the default size");
+        undeclared
+            .check_microvm_image_fits(1024 * MIB)
+            .expect("fits the default size");
         undeclared
             .check_microvm_image_fits(40 * 1024 * MIB)
             .expect_err("40 GiB fits no size");
