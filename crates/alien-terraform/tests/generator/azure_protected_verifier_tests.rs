@@ -294,6 +294,17 @@ fn the_ledger_waits_for_the_callers_vault_grant() {
         .map(|(_, contents)| contents.to_string())
         .collect::<String>();
     assert!(main.contains("resource \"time_sleep\" \"management_signing_setup_rbac\""));
+    let sleep = main
+        .split("resource \"time_sleep\" \"management_signing_setup_rbac\"")
+        .nth(1)
+        .and_then(|rest| rest.split("\n}\n").next())
+        .expect("the wait");
+    assert!(sleep.contains("triggers"), "{sleep}");
+    assert!(sleep.contains("azurerm_key_vault.management_signing.id"), "{sleep}");
+    assert!(
+        sleep.contains("azurerm_role_assignment.management_signing_setup.principal_id"),
+        "{sleep}"
+    );
     let ledger = main
         .split("resource \"azurerm_key_vault_secret\" \"management_signing_ledger\"")
         .nth(1)

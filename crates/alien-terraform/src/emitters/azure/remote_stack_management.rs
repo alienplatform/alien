@@ -852,6 +852,24 @@ fn emit_verifier_grants(
         &format!("{vault}_setup_rbac"),
         [
             attr("create_duration", Expression::String("60s".to_string())),
+            // A recreated vault or grant must wait again; `depends_on` only orders.
+            attr(
+                "triggers",
+                expr::object([
+                    (
+                        "vault_id",
+                        expr::traversal(["azurerm_key_vault", &vault, "id"]),
+                    ),
+                    (
+                        "principal_id",
+                        expr::traversal([
+                            "azurerm_role_assignment",
+                            &format!("{vault}_setup"),
+                            "principal_id",
+                        ]),
+                    ),
+                ]),
+            ),
             attr(
                 "depends_on",
                 Expression::Array(vec![expr::traversal([
