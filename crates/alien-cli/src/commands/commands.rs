@@ -4,6 +4,7 @@
 //! - `alien dev commands invoke` — invokes against the local dev server
 //! - `alien commands invoke` — invokes against the standalone/platform manager
 
+#[cfg(feature = "platform")]
 use crate::commands::command_records::{self, StatusArg};
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
@@ -81,6 +82,7 @@ pub enum CommandsAction {
         timeout: u64,
     },
 
+    #[cfg(feature = "platform")]
     /// List commands, newest first (platform)
     Ls {
         /// Only commands of this deployment: ID, or <deployment-group-name>/<deployment-name>
@@ -108,6 +110,7 @@ pub enum CommandsAction {
         json: bool,
     },
 
+    #[cfg(feature = "platform")]
     /// Show one command: status, timings, target, error and response size (platform)
     Get {
         /// Command ID
@@ -118,6 +121,7 @@ pub enum CommandsAction {
         json: bool,
     },
 
+    #[cfg(feature = "platform")]
     /// Summarize commands per name: outcomes, p50/p95 duration, top errors (platform)
     Stats {
         /// Only commands of this deployment: ID, or <deployment-group-name>/<deployment-name>
@@ -136,18 +140,23 @@ pub enum CommandsAction {
 
 impl CommandsArgs {
     pub fn wants_json_output(&self) -> bool {
-        matches!(
+        #[cfg(feature = "platform")]
+        if matches!(
             self.action,
             CommandsAction::Ls { json: true, .. }
                 | CommandsAction::Get { json: true, .. }
                 | CommandsAction::Stats { json: true, .. }
-        )
+        ) {
+            return true;
+        }
+        false
     }
 }
 
 /// Execute commands task — works in all execution modes.
 pub async fn commands_task(args: CommandsArgs, ctx: ExecutionMode) -> Result<()> {
     match args.action {
+        #[cfg(feature = "platform")]
         CommandsAction::Ls {
             deployment,
             name,
@@ -169,7 +178,9 @@ pub async fn commands_task(args: CommandsArgs, ctx: ExecutionMode) -> Result<()>
             )
             .await
         }
+        #[cfg(feature = "platform")]
         CommandsAction::Get { id, json } => command_records::get_task(&ctx, &id, json).await,
+        #[cfg(feature = "platform")]
         CommandsAction::Stats {
             deployment,
             since,

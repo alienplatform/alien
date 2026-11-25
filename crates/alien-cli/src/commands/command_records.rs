@@ -240,6 +240,14 @@ async fn resolve_deployment_id(
     Ok(String::from(detail.id))
 }
 
+/// The project to filter on: only the global `--project` flag. Without it, commands span the workspace.
+async fn project_filter(ctx: &ExecutionMode, json: bool) -> Result<Option<String>> {
+    match ctx.project_override() {
+        Some(name) => Ok(Some(ctx.resolve_project(Some(name), !json).await?.0)),
+        None => Ok(None),
+    }
+}
+
 fn workspace_param(workspace: Option<&str>) -> Result<Option<ListCommandsWorkspace>> {
     workspace
         .map(|workspace| {
@@ -265,9 +273,11 @@ pub async fn list_task(ctx: &ExecutionMode, options: ListOptions) -> Result<()> 
         }
         None => None,
     };
+    let project_id = project_filter(ctx, options.json).await?;
     let items = list_commands(
         &client,
         workspace.as_deref(),
+        project_id.as_deref(),
         deployment_id.as_deref(),
         &options,
         Utc::now(),
@@ -279,6 +289,7 @@ pub async fn list_task(ctx: &ExecutionMode, options: ListOptions) -> Result<()> 
 async fn list_commands(
     client: &alien_platform_api::Client,
     workspace: Option<&str>,
+    project_id: Option<&str>,
     deployment_id: Option<&str>,
     options: &ListOptions,
     now: DateTime<Utc>,
@@ -296,6 +307,9 @@ async fn list_commands(
             ]);
         if let Some(workspace) = workspace.clone() {
             request = request.workspace(workspace);
+        }
+        if let Some(id) = project_id {
+            request = request.project(id);
         }
         if let Some(id) = deployment_id {
             request = request.deployment_id(id);
@@ -467,9 +481,11 @@ pub async fn stats_task(ctx: &ExecutionMode, options: StatsOptions) -> Result<()
         }
         None => None,
     };
+    let project_id = project_filter(ctx, options.json).await?;
     let items = command_stats(
         &client,
         workspace.as_deref(),
+        project_id.as_deref(),
         deployment_id.as_deref(),
         options.since,
         Utc::now(),
@@ -484,6 +500,7 @@ pub async fn stats_task(ctx: &ExecutionMode, options: StatsOptions) -> Result<()
 async fn command_stats(
     client: &alien_platform_api::Client,
     workspace: Option<&str>,
+    project_id: Option<&str>,
     deployment_id: Option<&str>,
     since: Duration,
     now: DateTime<Utc>,
@@ -491,6 +508,9 @@ async fn command_stats(
     let mut request = client.get_command_stats().created_after(now - since);
     if let Some(workspace) = workspace {
         request = request.workspace(workspace);
+    }
+    if let Some(id) = project_id {
+        request = request.project(id);
     }
     if let Some(id) = deployment_id {
         request = request.deployment_id(id);
@@ -646,6 +666,7 @@ mod tests {
                 when.method(GET)
                     .path("/v1/commands")
                     .query_param("deploymentId", DEP)
+                    .query_param("project", "prj_x")
                     .query_param("name", "compact")
                     .query_param("state", "FAILED")
                     .query_param("createdAfter", "2025-12-31T00:00:00Z")
@@ -665,7 +686,7 @@ mod tests {
         opts.status = Some(StatusArg::Failed);
         opts.since = Some(Duration::hours(24));
         let now = "2026-01-01T00:00:00Z".parse().unwrap();
-        let items = list_commands(&client, None, Some(DEP), &opts, now)
+        let items = list_commands(&client, None, Some("prj_x"), Some(DEP), &opts, now)
             .await
             .expect("lists");
         mock.assert_async().await;
@@ -710,7 +731,7 @@ mod tests {
         let client = alien_platform_api::Client::new(&server.base_url());
         let mut opts = options();
         opts.limit = 3;
-        let items = list_commands(&client, None, None, &opts, Utc::now())
+        let items = list_commands(&client, None, None, None, &opts, Utc::now())
             .await
             .expect("lists");
         first.assert_async().await;
@@ -764,7 +785,7 @@ mod tests {
             .await;
         let client = alien_platform_api::Client::new(&server.base_url());
         let now = "2026-01-01T00:00:00Z".parse().unwrap();
-        let items = command_stats(&client, None, None, Duration::days(7), now)
+        let items = command_stats(&client, None, None, None, Duration::days(7), now)
             .await
             .expect("stats");
         mock.assert_async().await;
@@ -788,7 +809,7 @@ mod tests {
                 })
                 .await;
             let client = alien_platform_api::Client::new(&server.base_url());
-            let error = command_stats(&client, None, None, Duration::days(7), Utc::now())
+            let error = command_stats(&client, None, None, None, Duration::days(7), Utc::now())
                 .await
                 .expect_err("an older platform has no stats");
             assert!(
