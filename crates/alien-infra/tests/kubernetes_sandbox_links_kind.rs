@@ -661,14 +661,20 @@ async fn a_linked_kubernetes_sandbox_reaches_its_link_through_the_gateway_and_no
     let placeholder = "Authorization: Bearer placeholder";
     let before = echoed(Some(placeholder));
     println!("CREDENTIALS no rules -> {before:?}");
-    assert!(before.contains("authorization: Bearer placeholder"), "{before}");
+    assert!(
+        before.contains("authorization: Bearer placeholder"),
+        "{before}"
+    );
     egress
         .update_credentials(SESSION, &set(Some(FIRST)))
         .await
         .expect("credential rules acknowledged");
     let first = echoed(Some(placeholder));
     println!("CREDENTIALS first -> {}", first.replace(FIRST, "<FIRST>"));
-    assert!(first.contains(&format!("authorization: Bearer {FIRST}")), "{first}");
+    assert!(
+        first.contains(&format!("authorization: Bearer {FIRST}")),
+        "{first}"
+    );
     assert!(!first.contains("placeholder"), "{first}");
     // Another session of the same Sandbox keeps its own header.
     let other_token = egress
@@ -704,7 +710,10 @@ async fn a_linked_kubernetes_sandbox_reaches_its_link_through_the_gateway_and_no
         "{removed}"
     );
     let none_sent = echoed(None);
-    assert!(!none_sent.to_ascii_lowercase().contains("authorization"), "{none_sent}");
+    assert!(
+        !none_sent.to_ascii_lowercase().contains("authorization"),
+        "{none_sent}"
+    );
     // The session pod never holds a value.
     egress
         .update_credentials(SESSION, &set(Some(FIRST)))
@@ -712,7 +721,16 @@ async fn a_linked_kubernetes_sandbox_reaches_its_link_through_the_gateway_and_no
         .expect("acknowledged");
     let env_dump = run(
         "kubectl",
-        &["-n", &namespace, "exec", &session_pod, "--", "sh", "-c", "env; cat /etc/ssl/certs/* 2>/dev/null | head -c 0"],
+        &[
+            "-n",
+            &namespace,
+            "exec",
+            &session_pod,
+            "--",
+            "sh",
+            "-c",
+            "env; cat /etc/ssl/certs/* 2>/dev/null | head -c 0",
+        ],
     );
     assert!(!env_dump.contains(FIRST) && !env_dump.contains(SECOND));
     println!("CREDENTIALS_KIND_OK env of the session pod holds neither value");

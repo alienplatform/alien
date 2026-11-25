@@ -7413,4 +7413,297 @@ mod tests {
         assert!(text.contains("of 50 versions"), "{text}");
         assert!(text.contains("becomes deletable at"), "{text}");
     }
+
+    /// A fake MicroVM image at the AWS version cap, shared by the blocked-rollout tests.
+    ///
+    /// The shape seen in the field: 50 versions held, 49 of them replaced and none marked
+    /// inactive, the serving version the newest.
+    mod blocked_rollout {
+        use super::*;
+        use alien_aws_clients::lambda::MockLambdaApi;
+        use alien_aws_clients::lambda_microvms::MicrovmImageVersionStatus;
+        use alien_core::{ResourceLifecycle, Worker, WorkerCode};
+
+        pub(super) const CAP: usize = 50;
+
+        #[derive(Default)]
+        pub(super) struct FakeImage {
+            /// `(version, inactive)` in creation order.
+            pub(super) versions: Mutex<Vec<(String, bool)>>,
+            /// Versions set inactive, in call order.
+            pub(super) retire_calls: Mutex<Vec<String>>,
+            /// Versions deleted, in call order.
+            pub(super) delete_calls: Mutex<Vec<String>>,
+            /// Build requests AWS accepted or refused.
+            pub(super) build_calls: Mutex<u32>,
+        }
+
+        impl FakeImage {
+            pub(super) fn at_cap() -> Arc<Self> {
+                let fake = Self::default();
+                *fake.versions.lock().unwrap() =
+                    (1..=CAP).map(|n| (format!("{n}.0"), false)).collect();
+                Arc::new(fake)
+            }
+
+            pub(super) fn held(&self) -> Vec<String> {
+                self.versions
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .map(|(version, _)| version.clone())
+                    .collect()
+            }
+
+            pub(super) fn client(self: &Arc<Self>) -> MockLambdaMicrovmsApi {
+                let mut client = MockLambdaMicrovmsApi::new();
+                let fake = self.clone();
+                client
+                    .expect_list_microvm_image_versions()
+                    .returning(move |_| {
+                        Ok(fake
+                            .versions
+                            .lock()
+                            .unwrap()
+                            .iter()
+                            .map(|(version, _)| MicrovmImage {
+                                description: None,
+                                image_identifier: None,
+                                image_arn: Some(IMAGE_ARN.to_string()),
+                                image_version: Some(version.clone()),
+                                state: Some("SUCCESSFUL".to_string()),
+                            })
+                            .collect())
+                    });
+                let fake = self.clone();
+                client.expect_update_microvm_image().returning(move |_, _| {
+                    *fake.build_calls.lock().unwrap() += 1;
+                    let mut versions = fake.versions.lock().unwrap();
+                    if versions.len() >= CAP {
+                        return Err(AlienError::new(
+                            CloudClientErrorData::VersionLimitExceeded {
+                                message: "maximum number of versions allowed".to_string(),
+                            },
+                        ));
+                    }
+                    versions.push(("51.0".to_string(), false));
+                    Ok(UpdateMicrovmImageResponse {
+                        image_version: Some("51.0".to_string()),
+                        image_arn: Some(IMAGE_ARN.to_string()),
+                        name: None,
+                        state: None,
+                    })
+                });
+                let fake = self.clone();
+                client.expect_update_microvm_image_version().returning(
+                    move |_, version, status| {
+                        assert_eq!(status, MicrovmImageVersionStatus::Inactive);
+                        fake.retire_calls.lock().unwrap().push(version.to_string());
+                        for entry in fake.versions.lock().unwrap().iter_mut() {
+                            if entry.0 == version {
+                                entry.1 = true;
+                            }
+                        }
+                        Ok(())
+                    },
+                );
+                let fake = self.clone();
+                client
+                    .expect_delete_microvm_image_version()
+                    .returning(move |_, version| {
+                        let mut versions = fake.versions.lock().unwrap();
+                        let inactive = versions.iter().any(|(v, off)| v == version && *off);
+                        assert!(
+                            inactive,
+                            "AWS cannot delete {version} before it is inactive"
+                        );
+                        fake.delete_calls.lock().unwrap().push(version.to_string());
+                        // Accepted now, gone on the next read.
+                        versions.retain(|(v, _)| v != version);
+                        Ok(())
+                    });
+                let fake = self.clone();
+                client
+                    .expect_get_microvm_image_version()
+                    .returning(move |_, version| {
+                        let versions = fake.versions.lock().unwrap();
+                        match versions.iter().find(|(v, _)| v == version) {
+                            Some((v, _)) => Ok(MicrovmImageVersion {
+                                image_version: Some(v.clone()),
+                                ..active_version()
+                            }),
+                            None => Err(not_found()),
+                        }
+                    });
+                client
+            }
+        }
+
+        /// The sandbox as the field had it: serving `50.0`, `1.0`..`49.0` replaced long ago, a
+        /// roll to a new bundle saved at `UpdatingImage`.
+        pub(super) fn blocked_controller() -> AwsSandboxController {
+            let mut controller = ready_controller();
+            controller.state = AwsSandboxState::UpdatingImage;
+            controller.active_version = Some("50.0".to_string());
+            controller.retired_versions =
+                (1..CAP).map(|n| retired(&format!("{n}.0"), None)).collect();
+            controller
+        }
+
+        /// The existing API: a Lambda worker whose saved config is the previous release's and
+        /// whose environment carries the sandbox binding it was applied with.
+        pub(super) fn consumer(permissions: &str) -> Worker {
+            Worker::new("api".to_string())
+                .code(WorkerCode::Image {
+                    image: "123456789012.dkr.ecr.us-east-1.amazonaws.com/api:latest".to_string(),
+                })
+                .permissions(permissions.to_string())
+                .link(&sandbox())
+                .build()
+        }
+
+        /// The binding the sandbox emitted when it served `version`.
+        pub(super) fn binding_naming(version: &str) -> String {
+            let mut controller = ready_controller();
+            controller.active_version = Some(version.to_string());
+            controller
+                .get_binding_params()
+                .unwrap()
+                .unwrap()
+                .to_string()
+        }
+
+        pub(super) fn provider_with_consumer_env(
+            client: MockLambdaMicrovmsApi,
+            environment: std::collections::HashMap<String, String>,
+        ) -> Arc<MockPlatformServiceProvider> {
+            let microvms = Arc::new(client);
+            let mut lambda = MockLambdaApi::new();
+            lambda
+                .expect_get_function_environment()
+                .returning(move |_| Ok(environment.clone()));
+            let lambda = Arc::new(lambda);
+            let mut provider = MockPlatformServiceProvider::new();
+            provider
+                .expect_get_aws_microvms_client()
+                .returning(move |_| Ok(microvms.clone()));
+            provider
+                .expect_get_aws_lambda_client()
+                .returning(move |_| Ok(lambda.clone()));
+            Arc::new(provider)
+        }
+
+        pub(super) async fn executor_with_consumer(
+            controller: AwsSandboxController,
+            provider: Arc<MockPlatformServiceProvider>,
+        ) -> SingleControllerExecutor {
+            let worker_state = crate::AwsWorkerController {
+                worker_name: Some("test-api".to_string()),
+                ..Default::default()
+            };
+            let mut executor = SingleControllerExecutor::builder()
+                .resource(sandbox_with_bundle(
+                    "s3://alien-bundles-test/sandbox/next.zip",
+                ))
+                .controller(controller)
+                .platform(Platform::Aws)
+                .service_provider(provider)
+                // The pending release changes the API, which waits for the sandbox's new version.
+                .with_stack_resource(consumer("new"), ResourceLifecycle::Live)
+                .build()
+                .await
+                .expect("executor should build");
+            let mut saved = alien_core::StackResourceState::builder()
+                .resource_type(alien_core::Worker::RESOURCE_TYPE.to_string())
+                .status(ResourceStatus::Running)
+                .config(alien_core::Resource::new(consumer("old")))
+                .lifecycle(ResourceLifecycle::Live)
+                .build();
+            saved
+                .set_internal_controller(Some(Box::new(worker_state)))
+                .unwrap();
+            executor.insert_saved_resource("api", saved);
+            executor
+        }
+    }
+
+    /// A Live sandbox at the version cap whose API still runs an installed older binding and
+    /// has a pending update that waits for the sandbox's new version. The next build is refused,
+    /// and the retry has to free versions on its own: only those no binding names go inactive,
+    /// nothing is deleted before the session fence, and once AWS confirms deletions the build is
+    /// accepted — across a saved checkpoint.
+    #[tokio::test]
+    async fn a_blocked_rollout_reclaims_versions_no_binding_names() {
+        use blocked_rollout::*;
+        let image = FakeImage::at_cap();
+        let environment = std::collections::HashMap::from([(
+            "ALIEN_AGENTS_BINDING".to_string(),
+            binding_naming("30.0"),
+        )]);
+        let provider = provider_with_consumer_env(image.client(), environment);
+        let mut executor = executor_with_consumer(blocked_controller(), provider.clone()).await;
+
+        // Retries inside the fence: versions go inactive, and AWS is not asked to build again.
+        let mut refusals = 0;
+        for _ in 0..8 {
+            match executor.step().await {
+                Ok(_) => {}
+                Err(_) => refusals += 1,
+            }
+        }
+        assert!(refusals > 0, "the build is withheld until a slot is free");
+        let retired = image.retire_calls.lock().unwrap().clone();
+        assert!(
+            retired.len() >= 40,
+            "unreferenced replaced versions go inactive, got {retired:?}"
+        );
+        assert!(
+            !retired
+                .iter()
+                .any(|v| v == "30.0" || v == "49.0" || v == "50.0"),
+            "the API's binding, the previous version and the serving one stay: {retired:?}"
+        );
+        assert_eq!(
+            *image.build_calls.lock().unwrap(),
+            0,
+            "no build while the cap holds"
+        );
+        assert!(
+            image.delete_calls.lock().unwrap().is_empty(),
+            "nothing is deleted inside the session fence"
+        );
+
+        // The fence passes across a saved checkpoint and a restart.
+        let mut saved = executor
+            .internal_state::<AwsSandboxController>()
+            .unwrap()
+            .clone();
+        for entry in saved.retired_versions.iter_mut() {
+            if let Some(at) = entry.inactive_at.as_mut() {
+                *at -= chrono::Duration::hours(9);
+            }
+        }
+        let restored: AwsSandboxController =
+            serde_json::from_value(serde_json::to_value(&saved).unwrap()).unwrap();
+        drop(executor);
+        let mut executor = executor_with_consumer(restored, provider).await;
+        for _ in 0..40 {
+            let _ = executor.step().await;
+            if executor
+                .internal_state::<AwsSandboxController>()
+                .unwrap()
+                .pending_version
+                .is_some()
+            {
+                break;
+            }
+        }
+        let controller = executor.internal_state::<AwsSandboxController>().unwrap();
+        assert_eq!(controller.pending_version.as_deref(), Some("51.0"));
+        let held = image.held();
+        for kept in ["30.0", "49.0", "50.0"] {
+            assert!(held.iter().any(|v| v == kept), "{kept} stays: {held:?}");
+        }
+        assert!(held.len() < CAP + 1);
+    }
 }
