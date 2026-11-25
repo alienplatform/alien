@@ -1614,9 +1614,7 @@ impl AwsSandboxController {
         // The version replaced most recently stays ACTIVE as well: a dependent whose own config
         // did not change is re-rendered with the new binding only by propagation or the
         // Ready-time refresh, which can land after this pass.
-        let retire_backoff = self.retire_denied_at.is_some_and(|at| {
-            chrono::Utc::now() < at + chrono::Duration::hours(RETIRE_DENIED_BACKOFF_HOURS)
-        });
+        let retire_backoff = self.retire_denied_in_backoff();
         // Observing dependents costs provider reads, so it waits for a version it could retire.
         let now_for_grace = chrono::Utc::now();
         let keep = self.retired_versions.len().saturating_sub(1);
@@ -1891,6 +1889,13 @@ impl AwsSandboxController {
 
     /// Why a roll cannot have a version slot: how many versions the image holds and what must
     /// happen before one frees.
+    /// Whether AWS refused a retire for a missing grant recently enough that retiring waits.
+    fn retire_denied_in_backoff(&self) -> bool {
+        self.retire_denied_at.is_some_and(|at| {
+            chrono::Utc::now() < at + chrono::Duration::hours(RETIRE_DENIED_BACKOFF_HOURS)
+        })
+    }
+
     fn version_cap_message(&self, image: &str, held: &str) -> String {
         let next = self
             .retired_versions
@@ -1899,6 +1904,10 @@ impl AwsSandboxController {
             .min();
         let when = match next {
             Some(at) => format!("the oldest retired version becomes deletable at {at}"),
+            None if self.retire_denied_in_backoff() => "no version could be retired: the \
+                 installed role cannot call lambda:UpdateMicrovmImageVersion, so replaced \
+                 versions stay active until the setup stack is updated to grant it"
+                .to_string(),
             None if !self.retire_blocked_by.is_empty() => format!(
                 "no version has been retired yet: {} could not be proven to have stopped using \
                  the replaced versions, so they are kept until it is",
@@ -7265,6 +7274,11 @@ mod tests {
             .iter()
             .all(|v| v.inactive_at.is_none()));
         assert!(controller.retire_denied_at.is_some());
+        let message = controller.version_cap_message(IMAGE_ARN, "50");
+        assert!(
+            message.contains("lambda:UpdateMicrovmImageVersion"),
+            "{message}"
+        );
     }
 
     /// Cleanup never blocks an update: any other failure of the retire call is skipped for the
