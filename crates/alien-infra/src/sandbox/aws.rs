@@ -8053,6 +8053,19 @@ mod tests {
         assert!(entry.inactive_at.is_none(), "the state no longer calls it inactive");
     }
 
+    /// Real AWS cleanup: terminates the two harness sessions (`PROBE_OLD_MICROVM`,
+    /// `PROBE_PAUSED_MICROVM`) so the probe image can be deleted.
+    #[tokio::test]
+    #[ignore]
+    async fn live_blocked_rollout_terminate_sessions() {
+        use alien_aws_clients::lambda_microvms::LambdaMicrovmsApi;
+        let live = LiveHarness::from_env();
+        for name in ["PROBE_OLD_MICROVM", "PROBE_PAUSED_MICROVM"] {
+            let id = std::env::var(name).unwrap();
+            println!("{name} {id}: terminate {:?}", live.client.terminate_microvm(&id).await.is_ok());
+        }
+    }
+
     /// Real AWS: the old workload still starts a new session on `PROBE_V_OLD`.
     #[tokio::test]
     #[ignore]
