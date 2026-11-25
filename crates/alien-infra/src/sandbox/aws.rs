@@ -7859,7 +7859,14 @@ mod tests {
             .iter()
             .map(|version| retired(version, None))
             .collect();
-        let mut executor = live.executor(controller, vec![old.clone()]).await;
+        // `PROBE_PROTECT_PAUSED=1`: the dependent's answer also names the suspended session's
+        // version, so neither session's version may be retired.
+        let protect_paused = std::env::var("PROBE_PROTECT_PAUSED").is_ok();
+        let mut bound = vec![old.clone()];
+        if protect_paused {
+            bound.push(paused.clone());
+        }
+        let mut executor = live.executor(controller, bound).await;
         let mut stable = 0;
         let mut last = 0;
         for step in 0..80 {
@@ -7898,7 +7905,8 @@ mod tests {
         );
         for v in &versions {
             let status = live.status_of(v).await;
-            let kept = [&old, &serving, &newest_replaced].contains(&v);
+            let kept = [&old, &serving, &newest_replaced].contains(&v)
+                || (protect_paused && *v == paused);
             println!("{v}: {status:?}");
             assert_eq!(
                 status.as_deref(),
@@ -7908,8 +7916,8 @@ mod tests {
         }
         assert_eq!(
             live.status_of(&paused).await.as_deref(),
-            Some("INACTIVE"),
-            "the paused session's version retires"
+            Some(if protect_paused { "ACTIVE" } else { "INACTIVE" }),
+            "the paused session's version retires only when no binding names it"
         );
         std::fs::write(&checkpoint, serde_json::to_vec(&state).unwrap()).unwrap();
         println!("checkpoint written to {}", checkpoint.display());
@@ -7969,7 +7977,114 @@ mod tests {
                 None,
             )
             .await;
-        assert!(refused.is_err(), "an INACTIVE version takes no new session");
+        assert_eq!(
+            refused.is_err(),
+            !protect_paused,
+            "an INACTIVE version takes no new session"
+        );
+        if let Ok(vm) = refused {
+            if let Some(id) = vm.microvm_id {
+                let _ = live.client.terminate_microvm(&id).await;
+            }
+        }
+    }
+
+    /// Real AWS: from the checkpoint the retire step saved, ages `PROBE_AGE_VERSION` past the
+    /// fence (test-only) and makes the dependent name it again (a rollback) alongside
+    /// `PROBE_V_OLD` and `PROBE_V_PAUSED`. The delete is skipped, AWS shows the version
+    /// `ACTIVE` again, the state keeps it and no build starts. The checkpoint file is not
+    /// rewritten, so the next step still finds the version `INACTIVE` in its own copy.
+    #[tokio::test]
+    #[ignore]
+    async fn live_blocked_rollout_a_version_named_again_is_kept_not_deleted() {
+        let live = LiveHarness::from_env();
+        let old = std::env::var("PROBE_V_OLD").expect("PROBE_V_OLD");
+        let paused = std::env::var("PROBE_V_PAUSED").expect("PROBE_V_PAUSED");
+        let age = std::env::var("PROBE_AGE_VERSION").expect("PROBE_AGE_VERSION");
+        assert!(old != age && paused != age);
+        let bytes = std::fs::read(checkpoint_path()).expect("run the retire step first");
+        let mut controller =
+            AwsSandboxController::from_persisted(serde_json::from_slice(&bytes).unwrap())
+                .expect("the checkpoint loads");
+        let entry = controller
+            .retired_versions
+            .iter_mut()
+            .find(|r| r.version == age)
+            .expect("the version was retired by the retire step");
+        assert!(entry.inactive_at.is_some(), "it was marked inactive");
+        entry.inactive_at = Some(chrono::Utc::now() - chrono::Duration::hours(9));
+        assert_eq!(live.status_of(&age).await.as_deref(), Some("INACTIVE"));
+        let before = live.versions().await.len();
+        let mut executor = live
+            .executor(controller, vec![old.clone(), paused.clone(), age.clone()])
+            .await;
+        for step in 0..6 {
+            let result = executor.step().await;
+            let state = executor.internal_state::<AwsSandboxController>().unwrap();
+            println!(
+                "step {step}: ok={} deleting={:?} pending={:?} age inactive_at={:?}",
+                result.is_ok(),
+                state.deleting_version,
+                state.pending_version,
+                state
+                    .retired_versions
+                    .iter()
+                    .find(|r| r.version == age)
+                    .map(|r| r.inactive_at)
+            );
+            assert!(state.deleting_version.is_none(), "no delete was issued");
+            assert!(state.pending_version.is_none(), "no build was started");
+            tokio::time::sleep(Duration::from_secs(3)).await;
+        }
+        assert_eq!(
+            live.status_of(&age).await.as_deref(),
+            Some("ACTIVE"),
+            "the named version is ACTIVE again"
+        );
+        let after = live.versions().await;
+        assert_eq!(after.len(), before, "nothing was deleted");
+        assert!(after.contains(&age));
+        let state = executor.internal_state::<AwsSandboxController>().unwrap();
+        let entry = state
+            .retired_versions
+            .iter()
+            .find(|r| r.version == age)
+            .expect("still tracked");
+        assert!(entry.inactive_at.is_none(), "the state no longer calls it inactive");
+    }
+
+    /// Real AWS: after the retirement steps, neither session's version was retired or
+    /// deleted, the running session still runs and the suspended one resumes.
+    /// Needs `PROBE_OLD_MICROVM`, `PROBE_PAUSED_MICROVM`, `PROBE_V_OLD` and `PROBE_V_PAUSED`.
+    #[tokio::test]
+    #[ignore]
+    async fn live_blocked_rollout_sessions_survive() {
+        use alien_aws_clients::lambda_microvms::LambdaMicrovmsApi;
+        let live = LiveHarness::from_env();
+        for version in ["PROBE_V_OLD", "PROBE_V_PAUSED"] {
+            let version = std::env::var(version).unwrap();
+            assert_eq!(
+                live.status_of(&version).await.as_deref(),
+                Some("ACTIVE"),
+                "{version} was never retired"
+            );
+        }
+        let old = std::env::var("PROBE_OLD_MICROVM").unwrap();
+        let paused = std::env::var("PROBE_PAUSED_MICROVM").unwrap();
+        let state = live.client.get_microvm(&old).await.unwrap().state;
+        assert_eq!(state.as_deref(), Some("RUNNING"), "the running session runs");
+        live.client.resume_microvm(&paused).await.expect("resume");
+        let mut running = false;
+        for _ in 0..60 {
+            let state = live.client.get_microvm(&paused).await.unwrap().state;
+            if state.as_deref() == Some("RUNNING") {
+                running = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_secs(5)).await;
+        }
+        assert!(running, "the suspended session resumed");
+        println!("running session {old} still RUNNING; suspended {paused} resumed");
     }
 
     /// Real AWS, step 3 of 3: restarts from the checkpoint step 2 saved, ages `PROBE_AGE_VERSION`
@@ -7996,7 +8111,11 @@ mod tests {
             .find(|r| r.version == age)
             .expect("the version was retired by step 2");
         entry.inactive_at = Some(chrono::Utc::now() - chrono::Duration::hours(9));
-        let mut executor = live.executor(controller, vec![old.clone()]).await;
+        let mut bound = vec![old.clone()];
+        if std::env::var("PROBE_PROTECT_PAUSED").is_ok() {
+            bound.push(paused.clone());
+        }
+        let mut executor = live.executor(controller, bound).await;
         let held_before = live.versions().await.len();
         for step in 0..400 {
             let result = executor.step().await;
