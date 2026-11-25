@@ -57,7 +57,9 @@ fn command_target_and_destroy_confirmation_are_explicit() {
         "worker-a",
     ])
     .unwrap();
-    let CommandsAction::Invoke { target, .. } = args.action;
+    let CommandsAction::Invoke { target, .. } = args.action else {
+        panic!("expected invoke");
+    };
     assert_eq!(target.as_deref(), Some("worker-a"));
     let args = DestroyArgs::try_parse_from([
         "destroy",

@@ -134,6 +134,7 @@ impl Cli {
             Some(Commands::Logs(args)) => args.json,
             Some(Commands::Whoami(args)) => args.json,
             Some(Commands::Debug(args)) => args.wants_json_output(),
+            Some(Commands::Commands(args)) => args.wants_json_output(),
             Some(Commands::Deployments(args)) => args.wants_json_output(),
             Some(Commands::Status(args)) => args.wants_json_output(),
             Some(Commands::Dev(dev)) => match &dev.subcommand {
@@ -146,8 +147,8 @@ impl Cli {
                 | Some(DevSubcommand::Server)
                 | Some(DevSubcommand::Deploy(_))
                 | Some(DevSubcommand::Destroy(_))
-                | Some(DevSubcommand::Vault(_))
-                | Some(DevSubcommand::Commands(_)) => false,
+                | Some(DevSubcommand::Vault(_)) => false,
+                Some(DevSubcommand::Commands(args)) => args.wants_json_output(),
             },
             #[cfg(feature = "platform")]
             Some(Commands::Platform(PlatformCommand::Link(args))) => args.json,
@@ -182,7 +183,6 @@ impl Cli {
             | Some(Commands::Deploy(_))
             | Some(Commands::Destroy(_))
             | Some(Commands::Vault(_))
-            | Some(Commands::Commands(_))
             | Some(Commands::Serve(_))
             | Some(Commands::Stack(_))
             | Some(Commands::Upgrade(_))
