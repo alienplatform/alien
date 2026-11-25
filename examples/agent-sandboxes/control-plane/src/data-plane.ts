@@ -49,7 +49,7 @@ export interface DataPlane {
    * Ends every process of the sandbox user (the other users' are the runtime's), then lists again. Rejects
    * if anything is left or the listing fails.
    */
-  endProcesses(sandboxId: string): Promise<{ ended: number }>
+  endProcesses(sandboxId: string): Promise<{ ended: boolean }>
   exec(
     sandboxId: string,
     command: string,

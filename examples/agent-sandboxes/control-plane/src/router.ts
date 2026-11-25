@@ -118,10 +118,10 @@ export class ThreadRouter {
         // everything that is not the sandbox's own and checks the list is empty; if it cannot,
         // the turn does not start.
         if (owner !== user && hadSandbox) {
-          const { ended } = await this.dp.endProcesses(sandboxId)
+          await this.dp.endProcesses(sandboxId)
           this.emit(threadId, {
             type: "notice",
-            text: `ended ${ended} process${ended === 1 ? "" : "es"} that ${owner}'s turns left running`,
+            text: `ended the processes that ${owner}'s turns left running`,
           })
         }
         // The turn does not start until the gateway has the new user's token.

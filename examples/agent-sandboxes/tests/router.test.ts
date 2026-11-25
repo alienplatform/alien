@@ -66,7 +66,7 @@ function fakeDataPlane(options: { pauseResume: boolean; pauseMs?: number; execMs
     },
     async endProcesses(sandboxId) {
       calls.push(`end-processes ${sandboxId}`)
-      return { ended: 2 }
+      return { ended: true }
     },
     async exec(sandboxId, command) {
       calls.push(`exec ${sandboxId} ${command} start`)
@@ -217,7 +217,7 @@ describe("thread router", () => {
     expect(ended).toBeLessThan(calls.indexOf(`issue-token ${thread.id} bob`))
     expect(seen).toContainEqual({
       type: "notice",
-      text: "ended 2 processes that alice's turns left running",
+      text: "ended the processes that alice's turns left running",
     })
   })
 

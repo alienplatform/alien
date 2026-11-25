@@ -1,106 +1,82 @@
 // Ending what a thread's turns left running.
 //
 // Nothing of the previous user needs to survive a user switch: every turn starts its own agent
-// process and Claude Code keeps its conversation on disk. So the switch ends every process in
-// the sandbox that belongs to the sandbox user: the user the sweep itself runs as. Processes of
-// other users (the runtime's own, which the sandbox starts as root) are not the agent's and stay,
-// as do PID 1, the sweep's own ancestors, what the sweep's own command started in the last 5 seconds, and kernel threads (no command
-// line). The owner comes from the kernel (the Uid line of /proc/<pid>/status), which the agent
-// cannot change; the sweep does not look at anything else the agent controls, such as
-// environment variables or process names.
+// process and Claude Code keeps its conversation on disk. So the switch ends every process of
+// the sandbox user (the user commands run as), in two separate commands:
 //
-// `sweep` ends them and prints the pids. `list` prints what is left (and nothing when the
-// sandbox is clean); the runner lists again after a sweep and refuses to go on if anything is
-// still there.
+// 1. SWEEP_SCRIPT runs `kill -9 -1`. The kernel signals every process this user may signal,
+//    except the caller, in one call under the task list lock: nothing can fork away, rename
+//    itself or be re-parented in between, and no command line, name or environment is read.
+//    It may end the command's own wrapper too, so the command's exit status means nothing.
+// 2. VERIFY_SCRIPT, a new command, lists every process of that user except its own ancestors
+//    (zombies, which hold nothing, are skipped). It exits 1 and prints the pids if any is left,
+//    and exits 2 if anything cannot be read. The turn starts only when it exits 0.
 //
-// Run as root, the sweep refuses (exit 1, "the sweep must run as the sandbox user, not root"):
-// it would end the runtime's own helpers. The runner then fails the switch and no turn starts.
+// Both refuse to run as root (exit 1, "must run as the sandbox user, not root"): `kill -1` as
+// root would end the runtime's own helpers. A runtime that keeps a long-lived process as the
+// sandbox user is ended too, and the switch then fails closed: the turn errors. So the sandbox
+// image must run commands as a non-root user that nothing else in the sandbox uses.
 //
-// `$SWEEP_ROOT` (optional) limits both modes to the processes below one pid; the tests use it
-// to run the script on a machine that has other processes.
+// `$PROC_DIR` (optional, tests only) is the directory the verify lists, so a test can show how
+// it behaves for a process it cannot read.
 
 export const SWEEP_SCRIPT = String.raw`
-mode="$1"
-self=$$
 me=$(sed -n 's/^Uid:[[:space:]]*\([0-9]*\).*/\1/p' /proc/$$/status)
 [ -n "$me" ] || { echo "cannot read the sweep's own uid" >&2; exit 1; }
-# Root's processes include the runtime's own helpers: never end them. The switch fails closed.
 [ "$me" != 0 ] || { echo "the sweep must run as the sandbox user, not root" >&2; exit 1; }
-ppid_of() { sed -n 's/^PPid:[[:space:]]*//p' "/proc/$1/status" 2>/dev/null; }
+kill -9 -1
+`
 
-# This script and the processes that started it stay.
+// Shell builtins only: no process of its own is started, so there is nothing of the verify's
+// own to tell apart from a leftover.
+// (A plain template, not String.raw: `\${` is how the shell's own `${` is written in it.)
+export const VERIFY_SCRIPT = `
+proc="\${PROC_DIR:-/proc}"
+uid_of() { # prints the real uid from a status file
+  while read -r key val _; do
+    if [ "$key" = "Uid:" ]; then echo "$val"; return 0; fi
+  done < "$1"
+  return 1
+}
+ppid_of() {
+  while read -r key val _; do
+    if [ "$key" = "PPid:" ]; then echo "$val"; return 0; fi
+  done < "$1"
+  return 1
+}
+me=$(uid_of /proc/$$/status) || { echo "cannot read the verify's own uid" >&2; exit 2; }
+[ "$me" != 0 ] || { echo "the verify must run as the sandbox user, not root" >&2; exit 1; }
+
+# The verify's own ancestors (the shell it runs in and what started that) are not leftovers.
 keep=" "
-p=$self
+p=$$
 while [ -n "$p" ] && [ "$p" != 0 ]; do
   keep="$keep$p "
-  p=$(ppid_of "$p")
+  p=$(ppid_of /proc/$p/status) || { echo "cannot read the parent of $p" >&2; exit 2; }
 done
 
-# The command that started the sweep (the runtime wraps every command in a shell with a watchdog
-# beside it) is the topmost ancestor below PID 1. What it started at the same time as the sweep
-# (the watchdog, ls, sed) is the sweep's own. A runtime that runs every command under one
-# long-lived parent has old background processes under that parent too: those are not spared.
-top=$self
-p=$(ppid_of "$self")
-while [ -n "$p" ] && [ "$p" != 0 ] && [ "$p" != 1 ]; do
-  top=$p
-  p=$(ppid_of "$p")
+left=
+bad=
+for d in "$proc"/[0-9]*; do
+  pid=\${d##*/}
+  case "$keep" in *" $pid "*) continue ;; esac
+  if ! uid=$(uid_of "$d/status" 2>/dev/null); then
+    [ -d "$d" ] || continue   # it exited since the listing
+    bad="$bad $pid"; continue
+  fi
+  [ "$uid" = "$me" ] || continue
+  if ! read -r line < "$d/stat" 2>/dev/null; then
+    [ -d "$d" ] || continue
+    bad="$bad $pid"; continue
+  fi
+  # Field 2 (the command name) may hold spaces and parentheses: the state is the first field
+  # after the LAST closing parenthesis.
+  rest=\${line##*) }
+  state=\${rest%% *}
+  [ "$state" = Z ] && continue
+  left="$left $pid"
 done
-
-# Start time in clock ticks since boot (field 22 of /proc/<pid>/stat; the command name may hold
-# spaces, so cut after its closing parenthesis).
-started() { sed 's/.*) //' "/proc/$1/stat" 2>/dev/null | cut -d' ' -f20; }
-hz=$(getconf CLK_TCK 2>/dev/null || echo 100)
-since=$(( $(started "$self") - 5 * hz ))
-
-# Prints the pids that are left to end.
-candidates() {
-  for d in /proc/[0-9]*; do
-    pid=$(basename "$d")
-    [ "$pid" = 1 ] && continue
-    case "$keep" in *" $pid "*) continue ;; esac
-    [ -n "$(tr -d '\000' < "$d/cmdline" 2>/dev/null)" ] || continue
-    # Only the sandbox user's processes (the real uid, set by the kernel).
-    [ "$(sed -n 's/^Uid:[[:space:]]*\([0-9]*\).*/\1/p' "$d/status" 2>/dev/null)" = "$me" ] || continue
-    # Things the sweep's own command started just now (ls, tr, sed, the runtime's watchdog) are
-    # not the sandbox's. Turns are serialized and a switch happens between turns, so nothing
-    # legitimate is more than 5 seconds older than the sweep.
-    p=$pid
-    ours=
-    while [ -n "$p" ] && [ "$p" != 0 ] && [ "$p" != 1 ]; do
-      [ "$p" = "$top" ] && ours=1 && break
-      p=$(ppid_of "$p")
-    done
-    if [ -n "$ours" ]; then
-      t=$(started "$pid")
-      [ -n "$t" ] && [ "$t" -ge "$since" ] && continue
-    fi
-    if [ -n "$SWEEP_ROOT" ]; then
-      p=$pid
-      under=
-      while [ -n "$p" ] && [ "$p" != 0 ]; do
-        [ "$p" = "$SWEEP_ROOT" ] && under=1 && break
-        p=$(ppid_of "$p")
-      done
-      [ -n "$under" ] || continue
-    fi
-    echo "$pid"
-  done
-}
-
-if [ "$mode" = list ]; then
-  candidates
-  exit 0
-fi
-
-ended=" "
-for round in 1 2 3 4 5; do
-  left=$(candidates)
-  [ -n "$left" ] || break
-  for pid in $left; do
-    kill -9 "$pid" 2>/dev/null && ended="$ended$pid "
-  done
-  sleep 0.2
-done
-for pid in $ended; do echo "$pid"; done
+if [ -n "$bad" ]; then echo "cannot read:$bad" >&2; exit 2; fi
+if [ -n "$left" ]; then for pid in $left; do echo "$pid"; done; exit 1; fi
+exit 0
 `

@@ -1,6 +1,9 @@
 import { spawnSync } from "node:child_process"
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { describe, expect, it } from "vitest"
-import { SWEEP_SCRIPT } from "../data-plane/runner/src/processes"
+import { SWEEP_SCRIPT, VERIFY_SCRIPT } from "../data-plane/runner/src/processes"
 import {
   LineSplitter,
   pauseWhenIdle,
@@ -86,160 +89,130 @@ describe("a thread's lock in the runner", () => {
   })
 })
 
-describe("ending what a thread left running", () => {
-  // The sweep ends everything but the sandbox's own processes, so the test runs it in a
-  // throwaway PID namespace (as PID 1 there is the "sandbox's own" process); where such a
-  // namespace cannot be made the test is skipped.
-  const unshare = spawnSync("unshare", [
-    "--user",
-    "--map-user=1000",
-    "--pid",
-    "--fork",
-    "--mount-proc",
-    "true",
-  ])
-  const run = (script: string) =>
-    spawnSync(
-      "unshare",
-      ["--user", "--map-user=1000", "--pid", "--fork", "--mount-proc", "sh", "-c", script, "outer"],
-      { encoding: "utf8", env: { PATH: process.env.PATH, SWEEP: SWEEP_SCRIPT } },
-    )
+// The sweep is `kill -9 -1` and the verify lists what is left. Most of these tests run both in a
+// throwaway PID namespace of their own (the namespace's PID 1 is spared by `kill -1`, so the
+// outer shell survives); where one cannot be made, or perl is missing, they are skipped. The
+// verify's parsing tests use a fake /proc directory and run anywhere.
+const ENV = { PATH: process.env.PATH, SWEEP: SWEEP_SCRIPT, VERIFY: VERIFY_SCRIPT }
+const nsArgs = (mapping: string) => ["--user", mapping, "--pid", "--fork", "--mount-proc"]
+const inNamespace = (mapping: string, script: string) =>
+  spawnSync("unshare", [...nsArgs(mapping), "sh", "-c", script, "outer"], {
+    encoding: "utf8",
+    env: ENV,
+    timeout: 30000,
+  })
+const canNamespace = (mapping: string) =>
+  spawnSync("unshare", [...nsArgs(mapping), "true"]).status === 0 &&
+  spawnSync("perl", ["-e", "1"]).status === 0
 
-  it.skipIf(unshare.status !== 0)(
-    "ends every process, whatever env or name it has, then lists none",
+describe("ending what a thread left running", () => {
+  const ok = canNamespace("--map-user=1000")
+
+  it.skipIf(!ok)(
+    "ends a re-forking loop, a process with a blanked command line and a child of a long-lived parent",
     () => {
-      const result = run(
+      const result = inNamespace(
+        "--map-user=1000",
         [
-          // Processes the agent might leave: one that renames itself through env, a daemon that
-          // detaches, and a plain background job.
-          "SANDBOX_TURN_USER=nobody sleep 300 &",
-          "(setsid sleep 301 &) ",
-          "sleep 302 &",
-          "sleep 0.3",
-          // No pipes: a pipe's other end would be a sibling of the sweep, and be swept too.
-          'sh -c "$SWEEP" sweep list > /tmp/before.$$; echo "before: $(wc -l < /tmp/before.$$)"',
-          'sh -c "$SWEEP" sweep sweep > /tmp/ended.$$; echo "ended: $(wc -l < /tmp/ended.$$)"',
-          'sh -c "$SWEEP" sweep list > /tmp/after.$$; echo "after: $(wc -l < /tmp/after.$$)"',
-          "rm -f /tmp/before.$$ /tmp/ended.$$ /tmp/after.$$",
+          // A process that blanks its own argv (the old sweep skipped those as kernel threads).
+          "perl -e '$0=\"\"; sleep 600' &",
+          // A loop that forks detached children as fast as it can (a /proc walk cannot catch it).
+          "sh -c 'while :; do (sleep 500 &); sleep 0.01; done' &",
+          // A long-lived parent with an old child under it.
+          "setsid sh -c '(sleep 700 &); sleep 701' &",
+          "sleep 0.5",
+          'sh -c "$VERIFY" verify > /tmp/before.$$; echo "before: $?"',
+          'sh -c "$SWEEP" sweep; echo "sweep done"',
+          'sh -c "$VERIFY" verify > /tmp/after.$$; echo "after: $? left: $(wc -l < /tmp/after.$$)"',
+          "rm -f /tmp/before.$$ /tmp/after.$$",
         ].join("\n"),
       )
-      expect(result.stdout).toContain("ended: 3")
-      expect(result.stdout).toContain("after: 0")
-      expect(result.stdout).not.toContain("before: 0")
+      expect(result.stdout).toContain("before: 1")
+      expect(result.stdout).toContain("after: 0 left: 0")
     },
+    40000,
   )
-})
 
-describe("the sweep's own command wrapper", () => {
-  const ns = spawnSync("unshare", [
-    "--user",
-    "--map-user=1000",
-    "--pid",
-    "--fork",
-    "--mount-proc",
-    "true",
-  ])
-  // The runtime starts every command in a shell with a watchdog subshell (and its sleep) beside
-  // the command; those belong to the sweep's own command, so the listing afterwards is empty.
-  it.skipIf(ns.status !== 0)("is not counted as left over", () => {
-    const result = spawnSync(
-      "unshare",
-      [
-        "--user",
-        "--map-user=1000",
-        "--pid",
-        "--fork",
-        "--mount-proc",
-        "sh",
-        "-c",
-        'sleep 600 & sleep 0.2; sh -c \'( sleep 31 & wait ) & sh -c "$SWEEP" sweep sweep > /tmp/e.$$; sh -c "$SWEEP" sweep list > /tmp/l.$$; echo "ended: $(wc -l < /tmp/e.$$)"; echo "left: $(wc -l < /tmp/l.$$)"; rm -f /tmp/e.$$ /tmp/l.$$; kill $(jobs -p) 2>/dev/null\'',
-        "outer",
-      ],
-      { encoding: "utf8", env: { PATH: process.env.PATH, SWEEP: SWEEP_SCRIPT } },
+  it.skipIf(!ok)("the verify fails on a leftover and names it", () => {
+    const result = inNamespace(
+      "--map-user=1000",
+      'sleep 400 & sleep 0.2; sh -c "$VERIFY" verify > /tmp/o.$$; echo "exit: $?"; cat /tmp/o.$$ | tr "\\n" " "; echo; rm -f /tmp/o.$$',
     )
-    expect(result.stdout).toContain("ended: 1")
-    expect(result.stdout).toContain("left: 0")
+    expect(result.stdout).toContain("exit: 1")
   })
 })
 
-describe("a long-lived parent of every command", () => {
-  const ns = spawnSync("unshare", [
-    "--user",
-    "--map-user=1000",
-    "--pid",
-    "--fork",
-    "--mount-proc",
-    "true",
-  ])
-  // The parent has run for a while and an old background process sits under it: it is ended,
-  // while the fresh watchdog of the sweep's own command is spared.
-  it.skipIf(ns.status !== 0)(
-    "still ends old background processes under it",
-    () => {
-      const result = spawnSync(
-        "unshare",
-        [
-          "--user",
-          "--map-user=1000",
-          "--pid",
-          "--fork",
-          "--mount-proc",
-          "sh",
-          "-c",
-          'sh -c \'sleep 600 & sleep 6; ( sleep 31 & wait ) & sh -c "$SWEEP" sweep sweep > /tmp/e.$$; sh -c "$SWEEP" sweep list > /tmp/l.$$; echo "ended: $(wc -l < /tmp/e.$$)"; echo "left: $(wc -l < /tmp/l.$$)"; rm -f /tmp/e.$$ /tmp/l.$$; kill $(jobs -p) 2>/dev/null\'',
-          "outer",
-        ],
-        { encoding: "utf8", env: { PATH: process.env.PATH, SWEEP: SWEEP_SCRIPT } },
-      )
-      expect(result.stdout).toContain("ended: 1")
-      expect(result.stdout).toContain("left: 0")
-    },
-    20000,
-  )
+describe("the verify's reading of /proc", () => {
+  const uid = process.getuid?.() ?? 1000
+  const fake = (entries: Record<string, { status?: string; stat?: string }>) => {
+    const dir = mkdtempSync(join(tmpdir(), "fakeproc-"))
+    for (const [pid, files] of Object.entries(entries)) {
+      mkdirSync(join(dir, pid))
+      if (files.status !== undefined) writeFileSync(join(dir, pid, "status"), files.status)
+      if (files.stat !== undefined) writeFileSync(join(dir, pid, "stat"), files.stat)
+    }
+    return dir
+  }
+  const verify = (dir: string) =>
+    spawnSync("sh", ["-c", VERIFY_SCRIPT, "verify"], {
+      encoding: "utf8",
+      env: { PATH: process.env.PATH, PROC_DIR: dir },
+    })
+  const status = (u: number) => `Name:\tx\nUid:\t${u}\t${u}\t${u}\t${u}\n`
+  // The name is field 2 and may hold spaces and parentheses: cut after the last ")".
+  const statLine = (state: string) => `4242 (we ) ird name) ${state} 1 4242 4242 0 -1\n`
+
+  it("lists a running process of the sandbox user and exits 1", () => {
+    const r = verify(fake({ "4242": { status: status(uid), stat: statLine("S") } }))
+    expect(r.status).toBe(1)
+    expect(r.stdout.trim()).toBe("4242")
+  })
+  it("skips zombies, other users' processes", () => {
+    const r = verify(
+      fake({
+        "4242": { status: status(uid), stat: statLine("Z") },
+        "4243": { status: status(uid + 1), stat: statLine("S") },
+      }),
+    )
+    expect(r.status).toBe(0)
+    expect(r.stdout).toBe("")
+  })
+  it("fails closed when a process of the sandbox user cannot be read", () => {
+    const r = verify(fake({ "4242": { status: status(uid) } }))
+    expect(r.status).toBe(2)
+    expect(r.stderr).toContain("cannot read")
+    expect(verify(fake({ "4242": {} })).status).toBe(2)
+  })
 })
 
-describe("the sweep as root", () => {
-  const ns = spawnSync("unshare", [
-    "--user",
-    "--map-root-user",
-    "--pid",
-    "--fork",
-    "--mount-proc",
-    "true",
-  ])
-  it.skipIf(ns.status !== 0)("refuses, ends nothing and exits non-zero", () => {
-    const result = spawnSync(
-      "unshare",
-      [
-        "--user",
-        "--map-root-user",
-        "--pid",
-        "--fork",
-        "--mount-proc",
-        "sh",
-        "-c",
-        'sleep 500 & sleep 0.2; sh -c "$SWEEP" sweep sweep; echo "exit: $?"; kill -0 $! && echo "sleep alive"',
-        "outer",
-      ],
-      { encoding: "utf8", env: { PATH: process.env.PATH, SWEEP: SWEEP_SCRIPT } },
+describe("the sweep and the verify as root", () => {
+  const ok = canNamespace("--map-root-user")
+  it.skipIf(!ok)("both refuse, and the sweep ends nothing", () => {
+    const result = inNamespace(
+      "--map-root-user",
+      'sleep 500 & sleep 0.2; sh -c "$SWEEP" sweep; echo "sweep exit: $?"; sh -c "$VERIFY" verify; echo "verify exit: $?"; kill -0 $! && echo "sleep alive"',
     )
     expect(result.stderr).toContain("the sweep must run as the sandbox user, not root")
-    expect(result.stdout).toContain("exit: 1")
+    expect(result.stderr).toContain("the verify must run as the sandbox user, not root")
+    expect(result.stdout).toContain("sweep exit: 1")
+    expect(result.stdout).toContain("verify exit: 1")
     expect(result.stdout).toContain("sleep alive")
   })
 })
 
 describe("the sweep and process owners", () => {
-  // The runtime starts its own helpers as root; the sweep runs as the sandbox user and may only
-  // end that user's processes. Needs root to make both kinds, so it is skipped without it.
+  // The runtime starts its own helpers as root; the sweep runs as the sandbox user and ends only
+  // that user's processes. Needs root to make both kinds, so it is skipped without it.
   const root = spawnSync("sudo", ["-n", "unshare", "--pid", "--fork", "--mount-proc", "true"])
   it.skipIf(root.status !== 0)("leaves processes of another user alone", () => {
+    const as = "setpriv --reuid=65534 --regid=65534 --clear-groups"
     const result = spawnSync(
       "sudo",
       [
         "-n",
         "env",
         `SWEEP=${SWEEP_SCRIPT}`,
+        `VERIFY=${VERIFY_SCRIPT}`,
         "unshare",
         "--pid",
         "--fork",
@@ -248,20 +221,19 @@ describe("the sweep and process owners", () => {
         "-c",
         [
           "sleep 400 &",
-          "setpriv --reuid=65534 --regid=65534 --clear-groups sleep 401 &",
+          `${as} sleep 401 &`,
           "sleep 0.3",
-          'setpriv --reuid=65534 --regid=65534 --clear-groups sh -c "$SWEEP" sweep sweep > /tmp/ended.$$; echo "ended: $(wc -l < /tmp/ended.$$)"',
-          'setpriv --reuid=65534 --regid=65534 --clear-groups sh -c "$SWEEP" sweep list > /tmp/left.$$; echo "left: $(wc -l < /tmp/left.$$)"',
-          "rm -f /tmp/ended.$$ /tmp/left.$$",
+          `${as} sh -c "$SWEEP" sweep`,
+          `${as} sh -c "$VERIFY" verify > /tmp/left.$$; echo "left: $? $(wc -l < /tmp/left.$$)"`,
+          "rm -f /tmp/left.$$",
           // the root-owned sleep is still there
           'for p in /proc/[0-9]*; do tr "\\0" " " < $p/cmdline; echo; done | grep -c "^sleep 400" | sed "s/^/root sleep alive: /"',
         ].join("\n"),
         "outer",
       ],
-      { encoding: "utf8", env: { PATH: process.env.PATH, SWEEP: SWEEP_SCRIPT } },
+      { encoding: "utf8", env: { PATH: process.env.PATH } },
     )
-    expect(result.stdout).toContain("ended: 1")
-    expect(result.stdout).toContain("left: 0")
+    expect(result.stdout).toContain("left: 0 0")
     expect(result.stdout).toContain("root sleep alive: 1")
   })
 })

@@ -24,7 +24,7 @@ import { randomUUID } from "node:crypto"
 import { StringDecoder } from "node:string_decoder"
 import { sandbox } from "@alienplatform/bindings"
 import { createCommandReceiver } from "@alienplatform/commands"
-import { SWEEP_SCRIPT } from "./processes"
+import { SWEEP_SCRIPT, VERIFY_SCRIPT } from "./processes"
 import { LineSplitter, pauseWhenIdle, startTurn, stopTurn, ThreadEvents } from "./turns"
 
 const agent = sandbox("agent")
@@ -246,39 +246,48 @@ receiver.command("unbind-turn", async input => {
   return { unbound: true }
 })
 
-// A user switch ends everything the thread's turns left in the sandbox, then lists again: if
-// anything is still there (or the listing fails) this throws, and the turn does not start.
+// A user switch ends everything the thread's turns left in the sandbox: one `kill -9 -1`, then a
+// separate command that lists what is left. If anything is still there (or the listing fails)
+// this throws, and the turn does not start.
+async function runScript(sandboxId: string, script: string) {
+  const decoder = new StringDecoder("utf8")
+  let out = ""
+  let err = ""
+  let exitCode: number | null = null
+  for await (const frame of agent.runCommand(sandboxId, "sh", {
+    args: ["-c", script, "process-script"],
+    timeoutMs: 30_000,
+  })) {
+    if (frame.kind === "stdout") out += decoder.write(frame.data)
+    else if (frame.kind === "stderr") err += Buffer.from(frame.data).toString("utf8")
+    else if (frame.kind === "exit") exitCode = frame.exitCode
+  }
+  out += decoder.end()
+  return { out, err: err.trim(), exitCode }
+}
+
 receiver.command("end-processes", async input => {
   const sandboxId = str(obj(input), "sandboxId")
-  const run = async (mode: "sweep" | "list") => {
-    const pids: string[] = []
-    let exitCode: number | null = null
-    const decoder = new StringDecoder("utf8")
-    let text = ""
-    let errText = ""
-    for await (const frame of agent.runCommand(sandboxId, "sh", {
-      args: ["-c", SWEEP_SCRIPT, "sweep-script", mode],
-      timeoutMs: 30_000,
-    })) {
-      if (frame.kind === "stdout") text += decoder.write(frame.data)
-      else if (frame.kind === "stderr") errText += Buffer.from(frame.data).toString("utf8")
-      else if (frame.kind === "exit") exitCode = frame.exitCode
-    }
-    text += decoder.end()
-    if (exitCode !== 0)
-      throw new Error(
-        `the process ${mode} exited with ${exitCode}${errText.trim() ? `: ${errText.trim()}` : ""}`,
-      )
-    pids.push(...text.split("\n").filter(Boolean))
-    return pids
+  // The kill may end the command's own wrapper, so a failed or cut-off command is not an error
+  // here: the verify below decides. Its stderr is kept for the message.
+  let sweepNote = ""
+  try {
+    const sweep = await runScript(sandboxId, SWEEP_SCRIPT)
+    sweepNote = sweep.err
+  } catch (e) {
+    sweepNote = e instanceof Error ? e.message : String(e)
   }
-  const ended = await run("sweep")
-  const left = await run("list")
-  if (left.length > 0)
-    throw new Error(
-      `${left.length} process${left.length === 1 ? "" : "es"} still running after the sweep`,
-    )
-  return { ended: ended.length, remaining: 0 }
+  const verify = await runScript(sandboxId, VERIFY_SCRIPT)
+  if (verify.exitCode !== 0) {
+    const left = verify.out.split("\n").filter(Boolean)
+    const why =
+      verify.exitCode === 1 && left.length > 0
+        ? `${left.length} process${left.length === 1 ? "" : "es"} still running after the sweep`
+        : `the process check failed (exit ${verify.exitCode})`
+    const notes = [verify.err, sweepNote].filter(Boolean).join("; ")
+    throw new Error(notes ? `${why}: ${notes}` : why)
+  }
+  return { ended: true }
 })
 
 receiver.command("stop-turn", async input => {
