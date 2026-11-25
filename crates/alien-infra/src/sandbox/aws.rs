@@ -7546,6 +7546,26 @@ mod tests {
             let role = std::env::var("PROBE_BUILD_ROLE").expect("PROBE_BUILD_ROLE");
             let stem = role.strip_suffix("-build").expect("a `-build` role name");
             let (prefix, sandbox_id) = stem.split_once('-').expect("`<prefix>-<id>-build`");
+            let image = std::env::var("PROBE_IMAGE_ARN").expect("PROBE_IMAGE_ARN");
+            let bundle_uri = std::env::var("PROBE_BUNDLE_URI").expect("PROBE_BUNDLE_URI");
+            // Refuse anything that is not the disposable probe before any mutation.
+            assert_eq!(
+                config.region, "eu-central-1",
+                "the probe runs in eu-central-1"
+            );
+            assert!(prefix == "alien2697", "role is not a probe role: {role}");
+            assert_eq!(
+                image,
+                format!(
+                    "arn:aws:lambda:{}:{}:microvm-image:{prefix}-{sandbox_id}",
+                    config.region, config.account_id
+                ),
+                "image is not this probe's image"
+            );
+            assert!(
+                bundle_uri.starts_with(&format!("s3://{prefix}-{sandbox_id}-bundles/")),
+                "bundle is not in the probe bucket"
+            );
             Self {
                 client: Arc::new(
                     alien_aws_clients::lambda_microvms::LambdaMicrovmsClient::new(
@@ -7554,8 +7574,8 @@ mod tests {
                     ),
                 ),
                 config,
-                image: std::env::var("PROBE_IMAGE_ARN").expect("PROBE_IMAGE_ARN"),
-                bundle_uri: std::env::var("PROBE_BUNDLE_URI").expect("PROBE_BUNDLE_URI"),
+                image,
+                bundle_uri,
                 prefix: prefix.to_string(),
                 sandbox_id: sandbox_id.to_string(),
             }
@@ -7715,6 +7735,16 @@ mod tests {
         let paused = std::env::var("PROBE_V_PAUSED").expect("PROBE_V_PAUSED");
         let checkpoint = checkpoint_path();
         let versions = live.versions().await;
+        let age = std::env::var("PROBE_AGE_VERSION").expect("PROBE_AGE_VERSION");
+        let newest_replaced = versions[versions.len() - 2].clone();
+        let serving_version = versions.last().unwrap();
+        assert!(
+            [&old, &age, serving_version, &newest_replaced]
+                .iter()
+                .all(|v| **v != paused)
+                && old != age,
+            "the paused version differs from the protected and fixture-aged versions"
+        );
         assert_eq!(
             versions.len(),
             IMAGE_VERSION_QUOTA,
@@ -7741,7 +7771,12 @@ mod tests {
             preview_ports: vec![8080],
             ..Default::default()
         };
-        controller.retired_versions = Vec::new();
+        // The state the field tracked: every replaced version in roll order, long retired,
+        // none marked inactive.
+        controller.retired_versions = versions[..versions.len() - 1]
+            .iter()
+            .map(|version| retired(version, None))
+            .collect();
         let mut executor = live.executor(controller, vec![old.clone()]).await;
         let mut stable = 0;
         let mut last = 0;
@@ -7779,7 +7814,6 @@ mod tests {
             IMAGE_VERSION_QUOTA,
             "nothing deleted yet"
         );
-        let newest_replaced = versions[versions.len() - 2].clone();
         for v in &versions {
             let status = live.status_of(v).await;
             let kept = [&old, &serving, &newest_replaced].contains(&v);
@@ -7867,7 +7901,8 @@ mod tests {
         let live = LiveHarness::from_env();
         let old = std::env::var("PROBE_V_OLD").expect("PROBE_V_OLD");
         let age = std::env::var("PROBE_AGE_VERSION").expect("PROBE_AGE_VERSION");
-        assert_ne!(Some(old.as_str()), Some(age.as_str()));
+        let paused = std::env::var("PROBE_V_PAUSED").expect("PROBE_V_PAUSED");
+        assert!(old != age && paused != age && paused != old);
         let bytes = std::fs::read(checkpoint_path()).expect("run the retire step first");
         let mut controller =
             AwsSandboxController::from_persisted(serde_json::from_slice(&bytes).unwrap())
@@ -7906,6 +7941,21 @@ mod tests {
             "AWS no longer lists the deleted version"
         );
         assert!(after.contains(&old), "the live API's version is intact");
+        {
+            use alien_aws_clients::lambda_microvms::LambdaMicrovmsApi;
+            let read = live
+                .client
+                .get_microvm_image_version(&live.image, &age)
+                .await;
+            let error = read.expect_err("the deleted version cannot be read");
+            assert!(
+                matches!(
+                    error.error,
+                    Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
+                ),
+                "the read failed for a reason other than NotFound: {error:?}"
+            );
+        }
         println!("versions {held_before} -> {}", after.len());
     }
 
