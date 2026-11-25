@@ -178,7 +178,11 @@ mod tests {
     fn the_record_is_never_inside_a_resource() {
         let mut stack = three_workloads();
         let ids: Vec<String> = stack.resources().map(|(id, _)| id.clone()).collect();
-        stamp(&mut stack, &ids, &[Architecture::X86_64, Architecture::Arm64]);
+        stamp(
+            &mut stack,
+            &ids,
+            &[Architecture::X86_64, Architecture::Arm64],
+        );
         let json = serde_json::to_value(&stack).unwrap();
         for (id, entry) in json["resources"].as_object().unwrap() {
             assert!(

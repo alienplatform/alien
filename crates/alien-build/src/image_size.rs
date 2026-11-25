@@ -224,6 +224,42 @@ mod tests {
         file
     }
 
+    /// The build-time refusal measures the archive of each target and leaves an image that
+    /// fits, a platform without MicroVMs and an unmeasurable archive alone.
+    #[tokio::test]
+    async fn the_build_check_passes_what_fits_and_ignores_other_platforms() {
+        let directory = tempfile::tempdir().unwrap();
+        let target = alien_core::BinaryTarget::LinuxArm64;
+        let file = archive(vec![layer(&[("a", 1024 * 1024)], true)]);
+        file.persist(
+            directory
+                .path()
+                .join(format!("{}.oci.tar", target.runtime_platform_id())),
+        )
+        .unwrap();
+        let sandbox = alien_core::Sandbox::new("agents".to_string())
+            .code(alien_core::SandboxCode::Image {
+                image: "unused".to_string(),
+                bundled_from: None,
+            })
+            .egress(alien_core::SandboxEgress::None)
+            .lifecycle(alien_core::SandboxLifecyclePolicy::default())
+            .build();
+        for platform in [alien_core::Platform::Aws, alien_core::Platform::Gcp] {
+            crate::refuse_image_over_microvm_disk(&sandbox, directory.path(), &[target], platform)
+                .await
+                .expect("a small image fits");
+        }
+        crate::refuse_image_over_microvm_disk(
+            &sandbox,
+            &directory.path().join("missing"),
+            &[target],
+            alien_core::Platform::Aws,
+        )
+        .await
+        .expect("an unmeasurable image is not checked");
+    }
+
     /// Layers add up, compressed or not, a file a later layer rewrites counts once, and each file
     /// takes whole blocks.
     #[test]
@@ -293,7 +329,7 @@ mod tests {
         let path = std::env::var("PROBE_OCI_TAR").expect("PROBE_OCI_TAR");
         let bytes = uncompressed_size(Path::new(&path)).expect("a measurable image");
         println!("MEASURED {} MiB ({bytes} bytes)", bytes / (1024 * 1024));
-        let mut sandbox = alien_core::Sandbox::new("agents".to_string())
+        let sandbox = alien_core::Sandbox::new("agents".to_string())
             .code(alien_core::SandboxCode::Image {
                 image: "unused".to_string(),
                 bundled_from: None,
@@ -307,7 +343,6 @@ mod tests {
                 max_processes: None,
             })
             .build();
-        sandbox.image_size_bytes = Some(bytes);
         match sandbox.check_microvm_image_fits(bytes) {
             Ok(()) => println!("FIT builds on the selected MicroVM size"),
             Err(error) => println!("REFUSED {error}"),

@@ -285,7 +285,6 @@ impl AwsSandboxController {
                 message: "declared limits do not fit any MicroVM tier".to_string(),
                 resource_id: Some(config.id.clone()),
             })?;
-        refuse_image_over_disk(config)?;
         self.idle_pause_seconds = config.lifecycle.idle_pause_seconds;
         self.max_lifetime_seconds = config.lifecycle.max_lifetime_seconds;
         self.preview_ports = config.preview_ports.clone();
@@ -896,7 +895,6 @@ impl AwsSandboxController {
                 message: "declared limits do not fit any MicroVM tier".to_string(),
                 resource_id: Some(config.id.clone()),
             })?;
-        refuse_image_over_disk(config)?;
 
         if self.needs_bundle_write(&bundle) {
             return Ok(HandlerAction::Continue {
@@ -2060,22 +2058,6 @@ fn version_readiness(state: Option<&str>, status: Option<&str>) -> VersionReadin
             }
         }
         _ => VersionReadiness::Building,
-    }
-}
-
-/// Refuses, before AWS is called, an image that cannot build on the disk of the size the limits
-/// select. AWS reports that failure only as "An unknown error occurred", after pulling and
-/// exporting the image. An image without a recorded size (a release built before it was
-/// measured) is not checked.
-fn refuse_image_over_disk(config: &Sandbox) -> Result<()> {
-    match config.image_size_bytes {
-        Some(bytes) => config.check_microvm_image_fits(bytes).map_err(|refusal| {
-            AlienError::new(ErrorData::ResourceConfigInvalid {
-                message: refusal.message,
-                resource_id: Some(config.id.clone()),
-            })
-        }),
-        None => Ok(()),
     }
 }
 
@@ -3695,31 +3677,6 @@ mod tests {
             Some("1.0"),
             "the build the restart submitted is the one being tracked"
         );
-    }
-
-    /// An image that cannot build on the selected size's disk is refused before AWS is asked
-    /// anything: the mock has no expectations, so any call to it would panic. An image just
-    /// under the line goes on to the build.
-    #[tokio::test]
-    async fn an_image_over_the_microvm_disk_is_refused_before_aws_is_called() {
-        let mut oversized = sandbox();
-        oversized.image_size_bytes = Some(6200 * 1024 * 1024);
-        let mut executor = SingleControllerExecutor::builder()
-            .resource(oversized)
-            .controller(AwsSandboxController::default())
-            .platform(Platform::Aws)
-            .service_provider(provider(MockLambdaMicrovmsApi::new()))
-            .build()
-            .await
-            .expect("executor should build");
-        let error = executor
-            .step()
-            .await
-            .expect_err("the image does not fit the default size's disk");
-        let text = format!("{error:?}");
-        assert!(text.contains("6200Mi"), "image size in the message: {text}");
-        assert!(text.contains("8Gi disk"), "disk in the message: {text}");
-        assert!(text.contains("16Gi disk"), "limits to raise: {text}");
     }
 
     /// The restart that finds its image already built: a create whose response was lost and

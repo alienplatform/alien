@@ -174,12 +174,6 @@ pub(crate) const SANDBOX_IMAGE_USER: Feature = feature(
     Action::Refuse,
     "the sandbox would run as another user",
 );
-pub(crate) const SANDBOX_IMAGE_SIZE: Feature = feature(
-    "sandbox image sizes",
-    "3.3.78",
-    Action::Strip,
-    "the size is read only by the build-time disk check; older Operators never use it",
-);
 pub(crate) const SANDBOX_IMAGE_PERMISSIONS: Feature = feature(
     "sandbox image permissions and lifecycle steps",
     "3.3.70",
@@ -254,7 +248,6 @@ pub(crate) const FEATURES: &[&Feature] = &[
     &STORAGE_UPLOAD_ORIGINS,
     &SANDBOX_POLICY,
     &SANDBOX_IMAGE_USER,
-    &SANDBOX_IMAGE_SIZE,
     &SANDBOX_IMAGE_PERMISSIONS,
     &SANDBOX_LINKS,
     &REDIS,
@@ -433,14 +426,7 @@ pub(crate) fn apply(
             if queue.dead_letter.is_some() {
                 refuse(&QUEUE_DEAD_LETTER);
             }
-        } else if let Some(sandbox) = config.downcast_mut::<Sandbox>() {
-            if !operator.reads(&SANDBOX_IMAGE_SIZE) && sandbox.image_size_bytes.is_some() {
-                if signed {
-                    refuse(&SANDBOX_IMAGE_SIZE);
-                } else {
-                    sandbox.image_size_bytes = None;
-                }
-            }
+        } else if let Some(sandbox) = config.downcast_ref::<Sandbox>() {
             if !sandbox.links.is_empty() || sandbox.default_policy.is_some() {
                 refuse(&SANDBOX_POLICY);
             }
@@ -858,54 +844,6 @@ mod tests {
             "replicationRegionsInput",
         ] {
             assert!(!text.contains(gone), "{gone} still sent");
-        }
-    }
-
-    /// An Operator before the image size field parses a sandbox with strict field checks, so the
-    /// field would fail the whole target. Delivery removes it; a signed release is refused instead.
-    #[test]
-    fn a_sandbox_image_size_is_removed_for_operators_that_cannot_parse_it() {
-        let sized = || {
-            let mut sandbox = Sandbox::new("agents".to_string())
-                .code(alien_core::SandboxCode::Image {
-                    image: "s3://bundles/agents.zip".to_string(),
-                    bundled_from: None,
-                })
-                .egress(alien_core::SandboxEgress::None)
-                .lifecycle(Default::default())
-                .build();
-            sandbox.image_size_bytes = Some(6 << 30);
-            Stack::new("app".to_string())
-                .add(sandbox, ResourceLifecycle::Live)
-                .build()
-        };
-        for version in [None, Some("3.3.31"), Some("3.3.68"), Some("3.3.77")] {
-            let operator = OperatorVersion::from_report(version);
-            let mut stack = sized();
-            assert!(
-                apply(&mut stack, None, &operator, false).is_empty(),
-                "{version:?}"
-            );
-            let text = serde_json::to_string(&stack).unwrap();
-            assert!(!text.contains("imageSizeBytes"), "{version:?} still sent");
-            let mut signed = sized();
-            let refused = apply(&mut signed, None, &operator, true);
-            assert_eq!(
-                refused.iter().map(|f| f.name).collect::<Vec<_>>(),
-                ["sandbox image sizes"],
-                "{version:?}"
-            );
-            assert!(serde_json::to_string(&signed)
-                .unwrap()
-                .contains("imageSizeBytes"));
-        }
-        for version in [Some(NEXT_RELEASE), Some("dev")] {
-            let operator = OperatorVersion::from_report(version);
-            let mut stack = sized();
-            assert!(apply(&mut stack, None, &operator, true).is_empty());
-            assert!(serde_json::to_string(&stack)
-                .unwrap()
-                .contains("imageSizeBytes"));
         }
     }
 

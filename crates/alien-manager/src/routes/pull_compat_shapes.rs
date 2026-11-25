@@ -1198,7 +1198,6 @@ fn handled() -> Vec<(&'static str, &'static str, Handling)> {
         ("Sandbox", "default_policy", F(&SANDBOX_POLICY)),
         ("Sandbox", "links", F(&SANDBOX_POLICY)),
         ("Sandbox", "image_user", F(&SANDBOX_IMAGE_USER)),
-        ("Sandbox", "image_size_bytes", F(&SANDBOX_IMAGE_SIZE)),
         ("Sandbox", "gateway_links", F(&SANDBOX_LINKS)),
         // Published only for a stack whose sandboxes declare links, which the same feature refuses.
         ("SandboxEgressGateway", "links", F(&SANDBOX_LINKS)),

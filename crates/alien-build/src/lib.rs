@@ -860,15 +860,13 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
                                         aws_connector,
                                     )
                                     .await?;
-                                    sandbox.image_size_bytes = built_image_size(
+                                    refuse_image_over_microvm_disk(
+                                        &sandbox,
                                         Path::new(&image_uri),
                                         &settings.get_targets(),
-                                    )
-                                    .await;
-                                    warn_if_over_microvm_disk(
-                                        &sandbox,
                                         settings.platform.runtime_platform(),
-                                    );
+                                    )
+                                    .await?;
                                     Ok(image_uri)
                                 }
                                 .await
@@ -2779,8 +2777,7 @@ async fn prepare_prebuilt_sandbox(
         aws_connector,
     )
     .await?;
-    sandbox.image_size_bytes = built_image_size(Path::new(&directory), &targets).await;
-    warn_if_over_microvm_disk(&sandbox, platform);
+    refuse_image_over_microvm_disk(&sandbox, Path::new(&directory), &targets, platform).await?;
     // A local sandbox keeps its build directory: the local sandbox manager loads the archive
     // into the daemon the way it does for a local Container, and creates sessions from the id
     // the daemon reports, so no id has to be predicted here.
@@ -4722,14 +4719,25 @@ async fn compute_function_content_hash(dir: &Path) -> Result<String> {
     Ok(format!("{:x}", hasher.finalize()))
 }
 
-/// The largest uncompressed size across the built architectures, or `None` when any cannot be
-/// measured: the size is only recorded when it is known for every target.
-async fn built_image_size(directory: &Path, targets: &[alien_core::BinaryTarget]) -> Option<u64> {
+/// Fails an AWS build whose image cannot build on the disk of the MicroVM size the sandbox's
+/// limits select. AWS reports that failure only as "An unknown error occurred", after pulling
+/// and exporting the image, so the build says it first, with the sizes and the limits to raise.
+/// The size is the largest uncompressed size across the built architectures; an image whose
+/// size cannot be measured is not checked.
+async fn refuse_image_over_microvm_disk(
+    sandbox: &Sandbox,
+    directory: &Path,
+    targets: &[alien_core::BinaryTarget],
+    platform: Platform,
+) -> Result<()> {
+    if platform != Platform::Aws {
+        return Ok(());
+    }
     let paths: Vec<_> = targets
         .iter()
         .map(|target| directory.join(format!("{}.oci.tar", target.runtime_platform_id())))
         .collect();
-    tokio::task::spawn_blocking(move || {
+    let measured = tokio::task::spawn_blocking(move || {
         let mut largest = None;
         for path in paths {
             let size = image_size::uncompressed_size(&path)?;
@@ -4739,21 +4747,15 @@ async fn built_image_size(directory: &Path, targets: &[alien_core::BinaryTarget]
     })
     .await
     .ok()
-    .flatten()
-}
-
-/// Tells the author at release time that an AWS sandbox image will not build, as an early
-/// warning only: the controller makes the refusal, and a release is never blocked on a size.
-fn warn_if_over_microvm_disk(sandbox: &Sandbox, platform: Platform) {
-    if platform != Platform::Aws {
-        return;
-    }
-    let Some(bytes) = sandbox.image_size_bytes else {
-        return;
+    .flatten();
+    let Some(bytes) = measured else {
+        return Ok(());
     };
-    if let Err(error) = sandbox.check_microvm_image_fits(bytes) {
-        warn!("{error}");
-    }
+    sandbox.check_microvm_image_fits(bytes).map_err(|refusal| {
+        AlienError::new(ErrorData::BuildConfigInvalid {
+            message: refusal.message,
+        })
+    })
 }
 
 #[cfg(test)]
@@ -7544,16 +7546,6 @@ mod sandbox_build_tests {
         preview_ports: Vec<u16>,
     }
 
-    /// What an Operator older than the image size field reads: the pull-time compatibility
-    /// strip removes `imageSizeBytes` for it, so it never sees the field.
-    fn previous_reader_view(
-        sandbox: &alien_core::Sandbox,
-    ) -> std::result::Result<PreviousSandboxReader, serde_json::Error> {
-        let mut release = serde_json::to_value(sandbox).unwrap();
-        release.as_object_mut().unwrap().remove("imageSizeBytes");
-        serde_json::from_value(release)
-    }
-
     fn built_archive_exists(directory: &str) -> bool {
         std::fs::read_dir(directory).is_ok_and(|entries| {
             entries
@@ -7664,7 +7656,9 @@ mod sandbox_build_tests {
                     }
                 }
                 assert_eq!(sandbox.image_user, requires_new_reader.then_some(uid));
-                let old = previous_reader_view(sandbox);
+                let old = serde_json::from_value::<PreviousSandboxReader>(
+                    serde_json::to_value(sandbox).unwrap(),
+                );
                 if requires_new_reader {
                     assert!(old.unwrap_err().to_string().contains("imageUser"));
                 } else {
@@ -7910,7 +7904,9 @@ mod sandbox_build_tests {
                     environment.contains_key("ALIEN_SANDBOX_EGRESS_RUN_HOOK"),
                     !legacy
                 );
-                let old = previous_reader_view(sandbox);
+                let old = serde_json::from_value::<PreviousSandboxReader>(
+                    serde_json::to_value(sandbox).unwrap(),
+                );
                 if legacy {
                     old.expect("legacy no-USER mode must remain readable");
                 } else {

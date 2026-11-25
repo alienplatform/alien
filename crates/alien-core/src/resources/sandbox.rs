@@ -754,13 +754,6 @@ pub struct Sandbox {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "openapi", schema(ignore))]
     pub image_user: Option<u32>,
-    /// Uncompressed size of the built image in bytes, the largest across built architectures.
-    /// Absent on released artifacts and when it could not be measured; then no size check runs.
-    /// This is build output, not an authoring option.
-    #[builder(skip)]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "openapi", schema(ignore))]
-    pub image_size_bytes: Option<u64>,
     /// Private ECR base image an AWS build pulls; `code.image` names only the S3 bundle, so this is
     /// what the cross-account grant opens. Live only: the grant needs the customer account,
     /// which registration reports. Absent means the base image is pulled anonymously.
