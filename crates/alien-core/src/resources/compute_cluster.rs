@@ -224,8 +224,8 @@ impl CapacityGroup {
     /// gets an explicit `disabled`: a version created with `SourceVersion` inherits every
     /// field it omits and would otherwise keep `enabled`.
     pub fn aws_nested_virtualization(&self, instance_type: &str) -> Option<&'static str> {
-        let bare_metal =
-            find_instance_type(Platform::Aws, instance_type).is_some_and(|spec| spec.bare_metal);
+        let bare_metal = find_instance_type(Platform::Aws, instance_type)
+            .is_some_and(|spec| spec.bare_metal);
         if bare_metal {
             Some("disabled")
         } else if self.nested_virtualization == Some(true) {

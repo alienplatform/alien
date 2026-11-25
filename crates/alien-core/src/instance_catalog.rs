@@ -1908,12 +1908,7 @@ mod tests {
             find_instance_type(Platform::Aws, "m8g.metal-24xl").expect("m8g.metal-24xl is listed");
         assert!(m8g.bare_metal && m8g.architecture == Architecture::Arm64 && !m8g.nested_virt);
         for spec in CATALOG {
-            assert_eq!(
-                spec.bare_metal,
-                spec.name.contains(".metal"),
-                "{}",
-                spec.name
-            );
+            assert_eq!(spec.bare_metal, spec.name.contains(".metal"), "{}", spec.name);
             if spec.bare_metal {
                 assert!(!spec.auto_select, "{}", spec.name);
                 assert_eq!(
@@ -1928,25 +1923,12 @@ mod tests {
 
     #[test]
     fn primary_series_are_the_newest_plain_families_of_each_category_and_processor() {
-        for name in [
-            "m8i.large",
-            "c8i.large",
-            "r8a.large",
-            "m9g.large",
-            "i7i.large",
-            "g5.xlarge",
-        ] {
+        for name in ["m8i.large", "c8i.large", "r8a.large", "m9g.large", "i7i.large", "g5.xlarge"] {
             let spec = find_instance_type(Platform::Aws, name).expect(name);
             assert!(spec.primary, "{name} is not primary");
         }
         // An older generation, and newest-generation families with other options.
-        for name in [
-            "c5.large",
-            "m7i.large",
-            "c7g.large",
-            "c8in.large",
-            "i8ge.large",
-        ] {
+        for name in ["c5.large", "m7i.large", "c7g.large", "c8in.large", "i8ge.large"] {
             let spec = find_instance_type(Platform::Aws, name).expect(name);
             assert!(!spec.primary, "{name} is primary");
         }
@@ -1962,9 +1944,7 @@ mod tests {
         }
         // The label names the processor; each one keeps a primary series in every category.
         let processor = |spec: &InstanceTypeSpec| {
-            ["Graviton", "AMD", "Intel"]
-                .into_iter()
-                .find(|word| spec.label.contains(word))
+            ["Graviton", "AMD", "Intel"].into_iter().find(|word| spec.label.contains(word))
         };
         for spec in CATALOG.iter().filter(|spec| spec.platform == Platform::Aws) {
             assert!(

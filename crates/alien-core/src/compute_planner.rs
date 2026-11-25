@@ -2492,10 +2492,7 @@ mod tests {
             .expect("bare metal is listed");
         assert!(option.available, "{:?}", option.unavailable_reasons);
         assert!(option.nested_virtualization);
-        let recommended = pool
-            .recommended
-            .machine()
-            .expect("a machine is recommended");
+        let recommended = pool.recommended.machine().expect("a machine is recommended");
         assert!(
             !instance_catalog::find_instance_type(Platform::Aws, recommended)
                 .expect("recommended machine is in the catalog")

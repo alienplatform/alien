@@ -4,24 +4,24 @@
 //! shell or no `/etc/passwd` layers the same way.
 
 use crate::error::{ErrorData, Result};
-use crate::registry::{registry_failure, RegistryFailure};
-use crate::sandbox_identity::{image_command, image_layers, unreadable_file, BaseIdentity};
+use crate::registry::{RegistryFailure, registry_failure};
+use crate::sandbox_identity::{BaseIdentity, image_command, image_layers, unreadable_file};
 use crate::{
-    base_image_build_retry_delay, is_retryable_dockdash_image_pull_error,
-    BASE_IMAGE_BUILD_MAX_ATTEMPTS,
+    BASE_IMAGE_BUILD_MAX_ATTEMPTS, base_image_build_retry_delay,
+    is_retryable_dockdash_image_pull_error,
 };
 use alien_core::presigned::redact_url_for_error;
 use alien_core::sandbox_image::{
-    SandboxImage, AGENT_MODE, AGENT_PATH, AZURE_SANDBOX, GCP_AGENT_PLATFORM, IMAGE_COMMAND_PATH,
-    SESSION_ROOT_MODE,
+    AGENT_MODE, AGENT_PATH, AZURE_SANDBOX, GCP_AGENT_PLATFORM, IMAGE_COMMAND_PATH,
+    SESSION_ROOT_MODE, SandboxImage,
 };
 use alien_error::{AlienError, Context, GenericError, IntoAlienError};
 use dockdash::{
     Arch, BlobCache, BuildDiagnostics, ClientProtocol, Image, ImageBuilder, Layer, PullPolicy,
     RegistryAuth,
 };
-use oci_client::errors::{OciDistributionError, OciErrorCode};
 use oci_client::Reference;
+use oci_client::errors::{OciDistributionError, OciErrorCode};
 use std::error::Error as StdError;
 use tokio::time::sleep;
 use tracing::warn;
@@ -605,8 +605,8 @@ mod loopback_agent_registry_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dockdash::test_utils::setup_local_registry;
     use dockdash::PushOptions;
+    use dockdash::test_utils::setup_local_registry;
     use httpmock::Method::GET;
     use oci_client::client::{Client, ClientConfig};
     use std::io::Read;
