@@ -99,11 +99,14 @@ pub struct MicrovmTier {
 }
 
 impl MicrovmTier {
-    /// Whether an image of `image_bytes` uncompressed builds on this size's disk, leaving the
-    /// build its working room.
+    /// The largest image, in bytes, that builds on this size's disk.
+    pub fn max_image_bytes(&self) -> u64 {
+        self.max_disk_mib as u64 * 1024 * 1024 / 100 * MICROVM_IMAGE_DISK_PERCENT
+    }
+
+    /// Whether an image of `image_bytes` builds on this size's disk.
     pub fn fits_image(&self, image_bytes: u64) -> bool {
-        let usable_mib = (self.max_disk_mib - MICROVM_BUILD_DISK_MARGIN_MIB).max(0) as u64;
-        image_bytes <= usable_mib * 1024 * 1024
+        image_bytes <= self.max_image_bytes()
     }
 }
 
@@ -136,11 +139,13 @@ const AZURE_MAX_CPU_MILLICORES: i64 = 16_000;
 const AZURE_MEMORY_MIB_PER_CORE: i64 = 2 * 1024;
 const AZURE_DISK_MIB_PER_CORE: i64 = 20 * 1024;
 
-/// Disk a MicroVM image build needs beyond the image's own uncompressed size, in MiB. AWS pulls,
-/// exports and then builds the image on the size's disk, so an image just under the disk size
-/// still fails the build with AWS's bare "An unknown error occurred". PROVISIONAL until measured
-/// with a bisect of real builds.
-pub const MICROVM_BUILD_DISK_MARGIN_MIB: i64 = 2560;
+/// Share of a MicroVM size's disk an image may take, in percent. AWS pulls, exports and builds
+/// the image on that disk, and a build of an image over about three quarters of it fails with
+/// AWS's bare "An unknown error occurred". Measured with real builds of arm64 images: on the
+/// 8192 MiB disk 6100 MiB (74.5%) built and 6164 MiB (75.2%) did not; on the 16384 MiB disk
+/// 12116 MiB (74.0%) built and 13116 MiB (80.1%) did not. The line sits below the largest image
+/// proven to build, and the size counts each file in whole 4 KiB blocks.
+pub const MICROVM_IMAGE_DISK_PERCENT: u64 = 70;
 
 const MICROVM_TIERS: &[MicrovmTier] = &[
     MicrovmTier {
@@ -3069,7 +3074,7 @@ mod tests {
     #[test]
     fn every_microvm_size_accepts_an_image_up_to_its_line_and_refuses_one_byte_over() {
         for tier in MICROVM_TIERS {
-            let line = (tier.max_disk_mib - MICROVM_BUILD_DISK_MARGIN_MIB) as u64 * MIB;
+            let line = tier.max_image_bytes();
             assert!(tier.fits_image(0));
             assert!(tier.fits_image(line - 1), "under the line, {tier:?}");
             assert!(tier.fits_image(line), "at the line, {tier:?}");

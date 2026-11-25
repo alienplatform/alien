@@ -33,7 +33,7 @@ fn document(archive: &Path, name: &str) -> io::Result<Value> {
     let mut tar = tar::Archive::new(File::open(archive)?);
     for entry in tar.entries_with_seek()? {
         let mut entry = entry?;
-        if entry.path()?.as_ref() == Path::new(name) {
+        if is_entry(&entry, name)? {
             let mut bytes = Vec::new();
             entry
                 .by_ref()
@@ -46,6 +46,16 @@ fn document(archive: &Path, name: &str) -> io::Result<Value> {
         io::ErrorKind::NotFound,
         format!("image archive is missing {name}"),
     ))
+}
+
+/// Whether an archive entry is `name`, whether or not the archive writes a leading `./`.
+fn is_entry<R: Read>(entry: &tar::Entry<'_, R>, name: &str) -> io::Result<bool> {
+    let path: std::path::PathBuf = entry
+        .path()?
+        .components()
+        .filter(|part| !matches!(part, std::path::Component::CurDir))
+        .collect();
+    Ok(path == Path::new(name))
 }
 
 fn invalid(what: &str) -> io::Error {
@@ -85,7 +95,7 @@ fn apply_layer(archive: &Path, name: &str, files: &mut BTreeMap<String, u64>) ->
     let mut outer = tar::Archive::new(File::open(archive)?);
     for entry in outer.entries_with_seek()? {
         let entry = entry?;
-        if entry.path()?.as_ref() != Path::new(name) {
+        if !is_entry(&entry, name)? {
             continue;
         }
         let mut reader = BufReader::new(entry);
@@ -164,6 +174,7 @@ fn remove_under(files: &mut BTreeMap<String, u64>, directory: &str) {
 mod tests {
     use super::*;
     use std::io::Write;
+    use std::path::Path;
 
     fn append(builder: &mut tar::Builder<Vec<u8>>, path: &str, data: &[u8]) {
         let mut header = tar::Header::new_gnu();
@@ -188,21 +199,29 @@ mod tests {
     }
 
     fn archive(layers: Vec<Vec<u8>>) -> tempfile::NamedTempFile {
+        archive_under(layers, "")
+    }
+
+    fn archive_under(layers: Vec<Vec<u8>>, prefix: &str) -> tempfile::NamedTempFile {
         let mut outer = tar::Builder::new(Vec::new());
         let descriptors: Vec<Value> = (0..layers.len())
             .map(|i| serde_json::json!({ "digest": format!("sha256:layer{i}") }))
             .collect();
         for (i, bytes) in layers.iter().enumerate() {
-            append(&mut outer, &format!("blobs/sha256/layer{i}"), bytes);
+            append(&mut outer, &format!("{prefix}blobs/sha256/layer{i}"), bytes);
         }
         let manifest = serde_json::json!({ "layers": descriptors });
         append(
             &mut outer,
-            "blobs/sha256/manifest",
+            &format!("{prefix}blobs/sha256/manifest"),
             manifest.to_string().as_bytes(),
         );
         let index = serde_json::json!({ "manifests": [{ "digest": "sha256:manifest" }] });
-        append(&mut outer, "index.json", index.to_string().as_bytes());
+        append(
+            &mut outer,
+            &format!("{prefix}index.json"),
+            index.to_string().as_bytes(),
+        );
         let mut file = tempfile::NamedTempFile::new().unwrap();
         file.write_all(&outer.into_inner().unwrap()).unwrap();
         file
@@ -230,11 +249,52 @@ mod tests {
         assert_eq!(uncompressed_size(file.path()), Some(4096 * 2));
     }
 
+    /// `crane pull --format oci` and `tar -C dir .` write every entry under `./`.
+    #[test]
+    fn entries_written_under_a_dot_prefix_are_found() {
+        let file = archive_under(vec![layer(&[("a", 5000)], true)], "./");
+        assert_eq!(uncompressed_size(file.path()), Some(8192));
+    }
+
     /// An archive that cannot be read is unmeasured rather than an error.
     #[test]
     fn an_unreadable_archive_is_unmeasured() {
         let mut file = tempfile::NamedTempFile::new().unwrap();
         file.write_all(b"not a tar").unwrap();
         assert_eq!(uncompressed_size(file.path()), None);
+    }
+
+    /// Live check against an image pulled from a registry as an OCI archive: prints the measured
+    /// size and what the AWS check says for the customer's ceilings (4Gi memory, 10Gi disk).
+    ///
+    /// ```text
+    /// crane pull --platform linux/arm64 --format oci <image> dir && tar -C dir -cf image.oci.tar .
+    /// PROBE_OCI_TAR=image.oci.tar cargo test -p alien-build --lib image_size::tests::live -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore]
+    fn live_size_and_fit_of_a_pulled_image() {
+        let path = std::env::var("PROBE_OCI_TAR").expect("PROBE_OCI_TAR");
+        let bytes = uncompressed_size(Path::new(&path)).expect("a measurable image");
+        println!("MEASURED {} MiB ({bytes} bytes)", bytes / (1024 * 1024));
+        let mut sandbox = alien_core::Sandbox::new("agents".to_string())
+            .code(alien_core::SandboxCode::Image {
+                image: "unused".to_string(),
+                bundled_from: None,
+            })
+            .egress(alien_core::SandboxEgress::None)
+            .lifecycle(alien_core::SandboxLifecyclePolicy::default())
+            .limits(alien_core::SandboxLimits {
+                cpu: "2".to_string(),
+                memory: "4Gi".to_string(),
+                disk: "10Gi".to_string(),
+                max_processes: None,
+            })
+            .build();
+        sandbox.image_size_bytes = Some(bytes);
+        match sandbox.check_microvm_image_fits(bytes) {
+            Ok(()) => println!("FIT builds on the selected MicroVM size"),
+            Err(error) => println!("REFUSED {error}"),
+        }
     }
 }
