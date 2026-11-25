@@ -23,9 +23,9 @@ variable "availability_zones" {
 }
 
 variable "instance_type" {
-  description = "Instance type of the internal API host (arm64)."
+  description = "Instance type of the internal API host (arm64). It needs at least 1 GB of memory: installing Node runs out of memory on a t4g.nano."
   type        = string
-  default     = "t4g.nano"
+  default     = "t4g.micro"
 }
 
 variable "scanner_api_key" {
