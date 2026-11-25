@@ -564,11 +564,18 @@ impl AwsWorkerController {
         Ok(())
     }
 
+    /// True only when the runtime (not setup, not the cloud owner) deletes the network: a
+    /// created network with Live lifecycle. A setup-owned (Frozen) network is deleted by the
+    /// setup stack later, so the worker must not block its own teardown on it.
     fn owns_network(ctx: &ResourceControllerContext<'_>) -> bool {
         matches!(
             ctx.deployment_config.stack_settings.network,
             Some(NetworkSettings::Create { .. })
-        )
+        ) && ctx
+            .desired_stack
+            .resources
+            .get("default-network")
+            .is_some_and(|entry| entry.lifecycle == alien_core::ResourceLifecycle::Live)
     }
 
     fn resolve_domain_info(
@@ -5365,24 +5372,15 @@ impl AwsWorkerController {
             .num_seconds();
         if waited_seconds >= VPC_ENI_WAIT_SECONDS {
             self.vpc_eni_wait_started_at = None;
-            if owns_network {
-                // The network is deleted next and cannot go while interfaces remain. A retry
-                // of the delete starts a fresh wait.
-                return Err(AlienError::new(ErrorData::CloudPlatformError {
-                    message: format!(
-                        "AWS did not release the network interfaces of worker '{}' within {} minutes ({}). Retry the delete once AWS has released them",
-                        worker_config.id,
-                        VPC_ENI_WAIT_SECONDS / 60,
-                        network_interface_ids.join(", ")
-                    ),
-                    resource_id: Some(worker_config.id.clone()),
-                }));
-            }
+            // Continue so the certificate and log group are still removed. The network's own
+            // owner deletes it later: for a runtime-owned network that is its controller, which
+            // reports any interface that still blocks it; otherwise setup or the cloud owner.
             warn!(
                 worker=%worker_config.id,
                 network_interfaces=?network_interface_ids,
                 wait_seconds=VPC_ENI_WAIT_SECONDS,
-                "Lambda VPC interfaces remain after the cleanup wait; they may be shared with other functions. Continuing deletion in the externally managed network; unshared interfaces may require manual cleanup after the execution role is removed"
+                owns_network,
+                "Lambda VPC interfaces remain after the cleanup wait; continuing the worker deletion. The network owner deletes the network later; unshared interfaces may require manual cleanup after the execution role is removed"
             );
             return Ok(HandlerAction::Continue {
                 state: DeletingCertificate,
@@ -8343,10 +8341,11 @@ mod tests {
     #[case::existing_wait(false, 2690, true)]
     #[case::existing_timeout(false, 2700, true)]
     #[case::existing_released(false, 0, false)]
-    #[case::created_wait(true, 2690, true)]
-    #[case::created_released(true, 0, false)]
+    #[case::runtime_owned_wait(true, 2690, true)]
+    #[case::runtime_owned_timeout(true, 2700, true)]
+    #[case::runtime_owned_released(true, 0, false)]
     #[tokio::test]
-    async fn eni_wait_respects_network_ownership_and_wall_clock(
+    async fn eni_wait_is_wall_clock_bound_and_continues_after_the_wait(
         #[case] owns_network: bool,
         #[case] elapsed_seconds: i64,
         #[case] interfaces_remain: bool,
@@ -8389,6 +8388,7 @@ mod tests {
             .resource(basic_function())
             .controller(controller)
             .platform(Platform::Aws)
+            .dependency_lifecycle("default-network", ResourceLifecycle::Live)
             .with_dependency(
                 Network::new("default-network".into())
                     .settings(settings.network.clone().unwrap())
@@ -8403,7 +8403,9 @@ mod tests {
             .unwrap();
         executor.step().await.unwrap();
         let controller = executor.internal_state::<AwsWorkerController>().unwrap();
-        let waiting = interfaces_remain && (owns_network || elapsed_seconds < 2700);
+        // Every network, runtime-owned or not, continues after the wait so the certificate and
+        // log group are still deleted.
+        let waiting = interfaces_remain && elapsed_seconds < 2700;
         assert_eq!(
             controller.state,
             if waiting {
@@ -8418,11 +8420,16 @@ mod tests {
         );
     }
 
-    /// A network the deployment owns cannot be deleted while interfaces remain, so past the wait
-    /// the delete fails with a clear message, and the retry starts a fresh wait.
+    /// Past the wait, the worker deletion goes on to the certificate and log group steps for a
+    /// runtime-owned network (`Live`) and for a setup-owned one (`Frozen`, deleted later by the
+    /// setup stack): a lingering interface must not skip them.
+    #[rstest]
+    #[case::runtime_owned(ResourceLifecycle::Live)]
+    #[case::setup_owned(ResourceLifecycle::Frozen)]
     #[tokio::test]
-    async fn eni_wait_in_an_owned_network_fails_after_the_wall_clock_wait_and_a_retry_starts_over()
-    {
+    async fn eni_wait_past_the_deadline_continues_to_the_remaining_delete_steps(
+        #[case] network_lifecycle: ResourceLifecycle,
+    ) {
         let mut ec2 = MockEc2Api::new();
         ec2.expect_describe_network_interfaces().returning(|_| {
             Ok(serde_json::from_value(serde_json::json!({
@@ -8453,6 +8460,7 @@ mod tests {
             .resource(basic_function())
             .controller(controller)
             .platform(Platform::Aws)
+            .dependency_lifecycle("default-network", network_lifecycle)
             .with_dependency(
                 Network::new("default-network".into())
                     .settings(settings.network.clone().unwrap())
@@ -8465,18 +8473,10 @@ mod tests {
             .build()
             .await
             .unwrap();
-        let error = executor.step().await.expect_err("wait exhausted");
-        assert!(
-            error.to_string().contains("45 minutes") && error.to_string().contains("eni-held"),
-            "{error}"
-        );
-        assert_eq!(
-            executor
-                .internal_state::<AwsWorkerController>()
-                .unwrap()
-                .vpc_eni_wait_started_at,
-            None
-        );
+        executor.step().await.unwrap();
+        let controller = executor.internal_state::<AwsWorkerController>().unwrap();
+        assert_eq!(controller.state, AwsWorkerState::DeletingCertificate);
+        assert_eq!(controller.vpc_eni_wait_started_at, None);
     }
 
     #[rstest]
