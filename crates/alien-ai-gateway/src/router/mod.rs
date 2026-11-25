@@ -669,7 +669,12 @@ fn observe_result(
     match result {
         Ok(response) => Ok(observe_response(response, observer, context)),
         Err(error) => {
-            observe_gateway_error(observer, context, error.http_status_code.unwrap_or(500));
+            observe_gateway_error(
+                observer,
+                context,
+                error.http_status_code.unwrap_or(500),
+                Default::default(),
+            );
             Err(error)
         }
     }
@@ -818,6 +823,7 @@ async fn proxy_embeddings(
         route.region.clone(),
     )
     .with_requested_model(&requested_model);
+    let mut spent_tokens: u64 = 0;
     let response = async {
         match azure_request {
             Some((url, upstream_body)) => {
@@ -832,12 +838,29 @@ async fn proxy_embeddings(
                     embedding.upstream_id,
                     &requested_model,
                     &payload,
+                    &mut spent_tokens,
                 )
                 .await
             }
         }
     }
     .await;
+    // A batch that fails after some of its calls succeeded still spent those tokens, and a
+    // failed reply carries no usage: report them with the failure.
+    if let Err(error) = &response {
+        if spent_tokens > 0 {
+            observe_gateway_error(
+                state.usage_observer.as_ref(),
+                descriptor,
+                error.http_status_code.unwrap_or(500),
+                crate::usage::AiTokenUsage {
+                    input_tokens: Some(spent_tokens),
+                    ..Default::default()
+                },
+            );
+            return response;
+        }
+    }
     observe_result(response, state.usage_observer.as_ref(), descriptor)
 }
 
@@ -2522,6 +2545,45 @@ mod tests {
         // Only the calls in flight when the first refusal arrived, not one per input.
         let hits = mock.hits_async().await;
         assert!(hits <= 8, "{hits} calls reached the upstream");
+    }
+
+    #[tokio::test]
+    async fn vertex_embeddings_report_the_usage_of_calls_that_succeeded_before_a_refusal() {
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(POST).body_contains("fine");
+                then.status(200)
+                    .header("content-type", "application/json")
+                    .body(r#"{"predictions":[{"embeddings":{"values":[1.0],"statistics":{"token_count":5,"truncated":false}}}]}"#);
+            })
+            .await;
+        server
+            .mock_async(|when, then| {
+                when.method(POST).body_contains("refused");
+                then.status(429).body("quota");
+            })
+            .await;
+        let (sender, receiver) = mpsc::channel();
+        let observer: Arc<dyn AiUsageObserver> = Arc::new(TestUsageObserver(sender));
+        let url = serve(build_router_with_observer(
+            vec![vertex_embedding_route(&server.base_url())],
+            observer,
+        ))
+        .await;
+        let resp = reqwest::Client::new()
+            .post(format!("{url}/llm/v1/embeddings"))
+            .json(&json!({"model": "gemini-embedding-001", "input": ["fine", "refused"]}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 429);
+        resp.bytes().await.expect("body");
+        let event = receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("usage observation");
+        assert_eq!(event.outcome, AiUsageOutcome::ProviderError);
+        assert_eq!(event.tokens.input_tokens, Some(5));
     }
 
     #[tokio::test]

@@ -136,6 +136,7 @@ pub(crate) async fn proxy_vertex_embeddings(
     upstream_id: &str,
     requested_model: &str,
     payload: &Value,
+    spent_tokens: &mut u64,
 ) -> Result<Response> {
     use axum::response::IntoResponse;
     use futures::{stream, StreamExt};
@@ -231,9 +232,22 @@ pub(crate) async fn proxy_vertex_embeddings(
     let mut data = Vec::new();
     let mut tokens: u64 = 0;
     while let Some(reply) = replies.next().await {
+        // `spent_tokens` is what the calls that succeeded before a failure already used.
+        *spent_tokens = tokens;
         match reply? {
             // The refusal is the answer, mapped like every other upstream error.
-            Err(refused) => return forward_response(refused).await,
+            Err(refused) => {
+                let mut response = forward_response(refused).await?;
+                if tokens > 0 {
+                    response
+                        .extensions_mut()
+                        .insert(crate::usage::SpentBeforeFailure(crate::usage::AiTokenUsage {
+                            input_tokens: Some(tokens),
+                            ..Default::default()
+                        }));
+                }
+                return Ok(response);
+            }
             Ok((values, used)) => {
                 tokens += used;
                 data.push(

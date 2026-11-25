@@ -1366,6 +1366,11 @@ impl GcpAgentPlatformTemplateController {
         {
             return Ok(false);
         }
+        // The preview signer is placed by the same run as the grants. An engine reconciled before
+        // the signer existed has the grants saved and no signer, so it counts as out of date.
+        if self.preview_service_account.is_none() {
+            return Ok(true);
+        }
         Ok(self.reconciled_grants.as_deref()
             != Some(
                 crate::sandbox::grant_fingerprint::grant_inputs_fingerprint(

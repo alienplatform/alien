@@ -163,8 +163,18 @@ impl EdgeTokenSigner for KeyFileSigner {
         .as_bytes());
         let input = format!("{header}.{claims}");
         let pem = std::env::temp_dir().join(format!("edge-signer-{}.pem", uuid::Uuid::new_v4()));
-        std::fs::write(&pem, key["private_key"].as_str().unwrap()).expect("pem");
-        std::fs::set_permissions(&pem, std::os::unix::fs::PermissionsExt::from_mode(0o600)).ok();
+        // Created 0600 from the start, so no other user can read the key under any umask.
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&pem)
+                .expect("pem")
+                .write_all(key["private_key"].as_str().unwrap().as_bytes())
+                .expect("pem");
+        }
         let mut child = std::process::Command::new("openssl")
             .args(["dgst", "-sha256", "-sign"])
             .arg(&pem)

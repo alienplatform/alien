@@ -691,6 +691,43 @@ async fn a_setup_rerun_updates_only_when_the_profiles_changed() {
     );
 }
 
+/// An engine reconciled before the preview signer existed has its grants saved and no signer:
+/// a setup rerun asks for the update that creates it, and then none again.
+#[tokio::test]
+async fn a_setup_rerun_creates_the_missing_signer_for_an_unchanged_engine() {
+    let calls = Arc::new(Mutex::new(Calls::default()));
+    let (iam, platform) = clients(&calls);
+    let mut first = executor(iam, platform, true).await;
+    first.run_until_terminal().await.expect("create runs");
+    let mut controller = first
+        .internal_state::<GcpAgentPlatformTemplateController>()
+        .unwrap()
+        .clone();
+    assert!(controller.preview_service_account.is_some());
+    assert!(controller.reconciled_grants.is_some());
+    controller.preview_service_account = None;
+
+    let calls = Arc::new(Mutex::new(Calls::default()));
+    let (iam, platform) = clients(&calls);
+    let mut executor = executor_seeded(iam, platform, true, false, false, controller).await;
+    assert!(
+        executor.needs_update().unwrap(),
+        "saved grants and no signer ask for the update"
+    );
+    executor
+        .update(sandbox(vec![8080], alien_core::SandboxEgress::None))
+        .expect("update is accepted");
+    executor.run_until_terminal().await.expect("update runs");
+    let controller = executor
+        .internal_state::<GcpAgentPlatformTemplateController>()
+        .unwrap();
+    assert!(controller.preview_service_account.is_some());
+    assert!(
+        !executor.needs_update().unwrap(),
+        "the update settled the check"
+    );
+}
+
 /// An install moved to another manager identity gets the management grant again: the identity is
 /// an input of the reconcile, though the stack does not name it.
 #[tokio::test]
