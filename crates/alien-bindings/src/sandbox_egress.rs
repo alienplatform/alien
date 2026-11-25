@@ -276,7 +276,7 @@ impl SandboxEgressManager {
                         if let Ok(served) = self.served_protocol(target).await {
                             if served < min {
                                 return Err(unavailable(
-                                    "the egress gateway is older than this release needs; re-run setup to update the egress gateway",
+                                    "the egress gateway is older than this release needs; update the deployment to a release that installs a newer egress gateway",
                                 ));
                             }
                         } else {
@@ -489,7 +489,7 @@ impl SandboxEgressManager {
                     Ok(true) => {}
                     Ok(false) => {
                         return Err(unavailable(
-                            "the egress gateway is older than this release needs; re-run setup to update the egress gateway",
+                            "the egress gateway is older than this release needs; update the deployment to a release that installs a newer egress gateway",
                         ))
                     }
                     Err(error) if last => return Err(exhausted(error)),
@@ -774,7 +774,7 @@ impl SandboxEgressManager {
         let backoff = |attempt: u64| std::time::Duration::from_millis(100 * (attempt + 1));
         let old = || {
             unavailable(
-                "the egress gateway does not serve per-sandbox credentials yet; deploy a release that installs a newer egress gateway and re-run setup",
+                "the egress gateway does not serve per-sandbox credentials yet; update the deployment to a release that installs a newer egress gateway",
             )
         };
         // The exact record on every attempt: a partial fan-out may already have applied it.

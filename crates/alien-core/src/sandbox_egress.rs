@@ -62,8 +62,9 @@ pub const NO_LINKS_GATEWAY_DIGESTS: &[&str] = &[
 
 /// Gateway images pinned before admin protocol 2: per-sandbox credential rules, the stable
 /// sandbox CA and the preview relay. A binding that needs protocol 2 cannot use a gateway on one
-/// of these, and every check that would lead to one gives [`CREDENTIALS_UNAVAILABLE`]. The list
-/// never grows: the release that pins a gateway serving protocol 2 opens the feature.
+/// of these, and every check that would lead to one gives [`CREDENTIALS_UNAVAILABLE`]. An entry is
+/// added only for an image that was pinned and serves protocol 1; the pin itself must never be
+/// on this list.
 pub const NO_CREDENTIALS_GATEWAY_DIGESTS: &[&str] = &[
     "sha256:dbac794afe2185a8ce025d92ec05a5878d6367ae9380eccc2c3dfc4d55f1c59c",
     "sha256:1dc14128e34426b84c7a02228a6de790ea092b156776c3f2688b9843b26fc924",
@@ -76,6 +77,8 @@ pub const NO_CREDENTIALS_GATEWAY_DIGESTS: &[&str] = &[
     "sha256:69d97f5aceb41f5bc8eee09e497cd967f04ef19b649150a472607153446ef7d8",
     // The published v3.3.72 image, which reads links but not credential rules.
     "sha256:40a22a2aebf068da82d4310043875b383cdeba9cfa0aa90a649d67f70398a037",
+    // The published v3.3.73 image, which serves admin protocol 1.
+    "sha256:3cb7a6935faab449cb1d754edbfd711b330318ecaf2eb54f7135ee16550c4e8d",
 ];
 
 /// The refusal for anything that needs admin protocol 2 while the installed gateway image
@@ -116,8 +119,9 @@ pub fn gateway_image_serves_admin_protocol(image: &str) -> bool {
     !is_pinned_to(image, NO_ADMIN_PROTOCOL_GATEWAY_DIGESTS)
 }
 
-/// The gateway image this release installs for an internet sandbox.
-pub const SANDBOX_EGRESS_GATEWAY_IMAGE: &str = "ghcr.io/alienplatform/alien-egress-gateway@sha256:3cb7a6935faab449cb1d754edbfd711b330318ecaf2eb54f7135ee16550c4e8d";
+/// The gateway image this release installs for an internet sandbox: the published v3.3.76
+/// image, which serves admin protocol 2.
+pub const SANDBOX_EGRESS_GATEWAY_IMAGE: &str = "ghcr.io/alienplatform/alien-egress-gateway@sha256:f99569e520d8aa9fd647c7c228e10e153fe4aefde0af54b2bbabd1298407b043";
 
 /// The refusal for an Azure internet sandbox while the installed gateway image predates the
 /// admin protocol. Build, template and deployment checks all give this text.
@@ -491,6 +495,18 @@ mod tests {
         for digest in NO_LINKS_GATEWAY_DIGESTS {
             assert!(NO_CREDENTIALS_GATEWAY_DIGESTS.contains(digest));
         }
+    }
+
+    /// The pinned gateway serves admin protocol 2 (checked against the published v3.3.76 image),
+    /// and the v3.3.73 image, which serves protocol 1, is refused up front.
+    #[test]
+    fn the_pinned_gateway_image_serves_credentials() {
+        assert!(gateway_image_serves_credentials(
+            SANDBOX_EGRESS_GATEWAY_IMAGE
+        ));
+        assert!(!gateway_image_serves_credentials(
+            "ghcr.io/alienplatform/alien-egress-gateway@sha256:3cb7a6935faab449cb1d754edbfd711b330318ecaf2eb54f7135ee16550c4e8d"
+        ));
     }
 
     /// The published v3.3.72 gateway refuses WebSocket and other non-HTTP traffic to a link.
