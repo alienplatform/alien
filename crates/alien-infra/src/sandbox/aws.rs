@@ -8952,15 +8952,10 @@ mod tests {
             let mut worker = crate::AwsWorkerController::mock_ready("api-fn");
             let live = sandbox_binding_variable("31.0");
             let variable = alien_core::bindings::binding_env_var_name("agents");
-            worker.sent_sandbox_versions = [(variable.clone(), "30.0".to_string())]
-                .into_iter()
-                .collect();
-            let write = alien_aws_clients::lambda::Environment::builder()
-                .variables(live.clone())
-                .build();
-            worker.note_environment_write_for_test(
-                &write,
-                chrono::Utc::now() - chrono::Duration::minutes(changed_minutes_ago),
+            worker.note_replaced_for_test(
+                &variable,
+                "30.0",
+                Some(chrono::Utc::now() - chrono::Duration::minutes(changed_minutes_ago)),
             );
             let mut executor = executor_with_worker_controller(&image, Ok(live), worker).await;
             for _ in 0..8 {
@@ -8982,6 +8977,46 @@ mod tests {
                 !retired.iter().any(|v| v == "30.0"),
                 keeps_previous,
                 "changed {changed_minutes_ago} min ago: {retired:?}"
+            );
+        }
+    }
+
+    /// A worker unlinked from the sandbox a minute ago has no binding now, but invocations that
+    /// started before still hold the old one: its version stays until they have ended.
+    #[tokio::test]
+    async fn a_real_worker_unlinked_from_the_sandbox_keeps_its_old_binding_while_invocations_finish(
+    ) {
+        use blocked_rollout::*;
+        for (changed_minutes_ago, keeps_previous) in [(1, true), (30, false)] {
+            let image = FakeImage::at_cap();
+            let mut worker = crate::AwsWorkerController::mock_ready("api-fn");
+            let variable = alien_core::bindings::binding_env_var_name("agents");
+            worker.note_replaced_for_test(
+                &variable,
+                "30.0",
+                Some(chrono::Utc::now() - chrono::Duration::minutes(changed_minutes_ago)),
+            );
+            let mut executor = executor_with_worker_controller(
+                &image,
+                Ok(std::collections::HashMap::new()),
+                worker,
+            )
+            .await;
+            for _ in 0..8 {
+                executor
+                    .step()
+                    .await
+                    .expect("a draining image is a wait, not a failure");
+            }
+            let retired = image.retire_calls.lock().unwrap().clone();
+            assert!(
+                retired.iter().any(|v| v == "29.0"),
+                "reclaim ran: {retired:?}"
+            );
+            assert_eq!(
+                !retired.iter().any(|v| v == "30.0"),
+                keeps_previous,
+                "unlinked {changed_minutes_ago} min ago: {retired:?}"
             );
         }
     }

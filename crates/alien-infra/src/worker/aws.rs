@@ -855,13 +855,10 @@ pub struct AwsWorkerController {
     /// denied after that does not put the failed create back.
     #[serde(default)]
     pub(crate) delete_removed_something: bool,
-    /// The sandbox image version each binding variable named in the last environment this
-    /// controller sent to the function. Absent in state saved by older versions.
-    #[serde(default)]
-    pub(crate) sent_sandbox_versions: std::collections::BTreeMap<String, String>,
-    /// Sandbox image versions an environment write replaced, with the time of the write.
-    /// Invocations that started before the write still hold the old binding until the
-    /// function's maximum invocation time has passed. Absent in state saved by older versions.
+    /// Sandbox image versions an environment write took out of the function's binding. An
+    /// invocation that started before the function became Active with the new environment still
+    /// holds the old binding until the function's maximum invocation time has passed. Absent in
+    /// state saved by older versions.
     #[serde(default)]
     pub(crate) replaced_sandbox_versions: Vec<ReplacedSandboxVersion>,
     /// Wall-clock start of the external-network ENI wait, preserved across checkpoints.
@@ -999,21 +996,22 @@ pub(crate) struct ReplacedSandboxVersion {
     /// The binding variable that named the version.
     pub(crate) variable: String,
     pub(crate) version: String,
-    pub(crate) replaced_at: chrono::DateTime<Utc>,
+    /// When the function became Active with the new environment; `None` while that write is
+    /// still being applied (the old binding stays protected).
+    #[serde(default)]
+    pub(crate) replaced_at: Option<chrono::DateTime<Utc>>,
 }
 
 /// How long an invocation that started before an environment write can keep running: Lambda's
 /// 15-minute maximum, plus a margin for clock skew and the write taking effect.
 const REPLACED_BINDING_PROTECTION: chrono::Duration = chrono::Duration::seconds(15 * 60 + 60);
 
-/// The sandbox image version each binding variable in `environment` names.
-fn sandbox_versions_in(
-    environment: Option<&Environment>,
+/// The sandbox image version each binding variable in `variables` names.
+fn sandbox_versions_in<'a>(
+    variables: impl IntoIterator<Item = (&'a String, &'a String)>,
 ) -> std::collections::BTreeMap<String, String> {
-    let variables = environment.and_then(|environment| environment.variables.as_ref());
     variables
         .into_iter()
-        .flatten()
         .filter(|(name, _)| name.starts_with("ALIEN_") && name.ends_with("_BINDING"))
         .filter_map(|(name, value)| {
             let value = serde_json::from_str::<serde_json::Value>(value).ok()?;
@@ -1024,38 +1022,99 @@ fn sandbox_versions_in(
 }
 
 impl AwsWorkerController {
-    /// Notes the environment about to be sent to the function: a sandbox version it takes out
-    /// stays protected for [`REPLACED_BINDING_PROTECTION`] from `now`.
-    fn note_environment_write(
-        &mut self,
-        environment: Option<&Environment>,
-        now: chrono::DateTime<Utc>,
-    ) {
-        self.replaced_sandbox_versions
-            .retain(|replaced| now - replaced.replaced_at < REPLACED_BINDING_PROTECTION);
-        let sent = sandbox_versions_in(environment);
-        for (variable, version) in &self.sent_sandbox_versions {
-            if sent.get(variable) != Some(version) {
-                self.replaced_sandbox_versions.push(ReplacedSandboxVersion {
-                    variable: variable.clone(),
-                    version: version.clone(),
-                    replaced_at: now,
-                });
+    /// Reads the function's live environment right before a write of `request_environment` and
+    /// returns the sandbox versions the write takes out of its binding. Reading the live
+    /// function, not remembered state, covers workers whose state predates this tracking.
+    async fn sandbox_versions_leaving(
+        client: &dyn alien_aws_clients::lambda::LambdaApi,
+        function_name: &str,
+        request_environment: Option<&Environment>,
+    ) -> Result<Vec<(String, String)>> {
+        let live = client
+            .get_function_environment(function_name)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to read the worker's environment before changing it".to_string(),
+                resource_id: Some(function_name.to_string()),
+            })?;
+        let incoming = sandbox_versions_in(
+            request_environment
+                .and_then(|environment| environment.variables.as_ref())
+                .into_iter()
+                .flatten(),
+        );
+        Ok(sandbox_versions_in(&live)
+            .into_iter()
+            .filter(|(variable, version)| incoming.get(variable) != Some(version))
+            .collect())
+    }
+
+    /// Records, after the write succeeded, the versions it took out. They stay protected until
+    /// [`Self::settle_replaced_sandbox_versions`] starts their window.
+    fn note_replaced_sandbox_versions(&mut self, leaving: Vec<(String, String)>) {
+        for (variable, version) in leaving {
+            let known = self
+                .replaced_sandbox_versions
+                .iter_mut()
+                .find(|r| r.variable == variable && r.version == version);
+            match known {
+                // Moved off again before the earlier write settled, or back: restart.
+                Some(known) => known.replaced_at = None,
+                None => self.replaced_sandbox_versions.push(ReplacedSandboxVersion {
+                    variable,
+                    version,
+                    replaced_at: None,
+                }),
             }
         }
-        self.sent_sandbox_versions = sent;
+    }
+
+    /// Starts the protection window of every pending replaced version: the function is now
+    /// Active with the new environment, so only invocations already running hold the old one.
+    fn settle_replaced_sandbox_versions(&mut self, now: chrono::DateTime<Utc>) {
+        self.replaced_sandbox_versions.retain(|replaced| {
+            replaced
+                .replaced_at
+                .map_or(true, |at| now - at < REPLACED_BINDING_PROTECTION)
+        });
+        for replaced in &mut self.replaced_sandbox_versions {
+            replaced.replaced_at.get_or_insert(now);
+        }
+    }
+
+    /// Replaced versions of `variable` that invocations may still hold at `now`.
+    fn protected_replaced_versions(
+        &self,
+        variable: &str,
+        now: chrono::DateTime<Utc>,
+    ) -> Vec<String> {
+        self.replaced_sandbox_versions
+            .iter()
+            .filter(|replaced| {
+                replaced.variable == variable
+                    && replaced
+                        .replaced_at
+                        .map_or(true, |at| now - at < REPLACED_BINDING_PROTECTION)
+            })
+            .map(|replaced| replaced.version.clone())
+            .collect()
     }
 }
 
 #[cfg(test)]
 impl AwsWorkerController {
-    /// Records an environment write at `now`, as the update flow does.
-    pub(crate) fn note_environment_write_for_test(
+    /// Records a settled replacement at `at`, as a finished environment write does.
+    pub(crate) fn note_replaced_for_test(
         &mut self,
-        environment: &Environment,
-        now: chrono::DateTime<Utc>,
+        variable: &str,
+        version: &str,
+        at: Option<chrono::DateTime<Utc>>,
     ) {
-        self.note_environment_write(Some(environment), now);
+        self.replaced_sandbox_versions.push(ReplacedSandboxVersion {
+            variable: variable.to_string(),
+            version: version.to_string(),
+            replaced_at: at,
+        });
     }
 }
 
@@ -1090,8 +1149,12 @@ impl AwsWorkerController {
             })?;
         let Some(binding) = live.get(&alien_core::bindings::binding_env_var_name(sandbox_id))
         else {
-            // The function runs without a binding for this sandbox.
-            return Ok(Known(Vec::new()));
+            // The function runs without a binding for this sandbox now, but invocations that
+            // started before it was unlinked still hold the one it had.
+            return Ok(Known(self.protected_replaced_versions(
+                &alien_core::bindings::binding_env_var_name(sandbox_id),
+                Utc::now(),
+            )));
         };
         // Names only in reasons: binding values can carry secrets.
         let version = serde_json::from_str::<serde_json::Value>(binding)
@@ -1104,12 +1167,9 @@ impl AwsWorkerController {
                 // Invocations that began before the last write still hold the binding it
                 // replaced.
                 let mut versions = vec![version];
-                for replaced in &self.replaced_sandbox_versions {
-                    if replaced.variable == variable
-                        && now - replaced.replaced_at < REPLACED_BINDING_PROTECTION
-                        && !versions.contains(&replaced.version)
-                    {
-                        versions.push(replaced.version.clone());
+                for replaced in self.protected_replaced_versions(&variable, now) {
+                    if !versions.contains(&replaced) {
+                        versions.push(replaced);
                     }
                 }
                 Known(versions)
@@ -2820,7 +2880,6 @@ impl AwsWorkerController {
             .maybe_vpc_config(vpc_config)
             .build();
 
-        self.note_environment_write(request.environment.as_ref(), Utc::now());
         let arn = self.arn.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceConfigInvalid {
                 message: "Worker ARN not available for env var update".to_string(),
@@ -3351,7 +3410,12 @@ impl AwsWorkerController {
         let request = UpdateFunctionConfigurationRequest::builder()
             .environment(Environment::builder().variables(environment).build())
             .build();
-        self.note_environment_write(request.environment.as_ref(), Utc::now());
+        let leaving = Self::sandbox_versions_leaving(
+            client.as_ref(),
+            &aws_worker_name,
+            request.environment.as_ref(),
+        )
+        .await?;
         client
             .update_function_configuration(&arn, request)
             .await
@@ -3359,6 +3423,7 @@ impl AwsWorkerController {
                 message: "Failed to refresh the worker's linked bindings".to_string(),
                 resource_id: Some(worker_config.id.clone()),
             })?;
+        self.note_replaced_sandbox_versions(leaving);
         self.wait_for_lambda_started_at = None;
         Ok(HandlerAction::Continue {
             state: RefreshingLinkedBindingsWaitForActive,
@@ -3394,6 +3459,7 @@ impl AwsWorkerController {
         )? {
             return Ok(stay);
         }
+        self.settle_replaced_sandbox_versions(Utc::now());
         Ok(HandlerAction::Continue {
             state: Ready,
             suggested_delay: None,
@@ -3621,9 +3687,17 @@ impl AwsWorkerController {
         } else {
             None
         };
-        if let Some(request) = &request {
-            self.note_environment_write(request.environment.as_ref(), Utc::now());
-        }
+        let leaving = match &request {
+            Some(request) => {
+                Self::sandbox_versions_leaving(
+                    client.as_ref(),
+                    &aws_worker_name,
+                    request.environment.as_ref(),
+                )
+                .await?
+            }
+            None => Vec::new(),
+        };
 
         // On a protected install all of the update's writes go to the verifier in one request,
         // which it checks in full before it sends any: a refusal leaves the function on the
@@ -3690,6 +3764,7 @@ impl AwsWorkerController {
                 })?;
         }
 
+        self.note_replaced_sandbox_versions(leaving);
         // Always transition to wait state - linear flow
         self.wait_for_lambda_started_at = None;
         Ok(HandlerAction::Continue {
@@ -3732,6 +3807,7 @@ impl AwsWorkerController {
         )? {
             return Ok(stay);
         }
+        self.settle_replaced_sandbox_versions(Utc::now());
         Ok(HandlerAction::Continue {
             state: UpdateEnsuringPublicExposure,
             suggested_delay: None,
@@ -6675,7 +6751,6 @@ impl AwsWorkerController {
             eventbridge_rule_names: Vec::new(),
             eventbridge_permission_statement_ids: Vec::new(),
             delete_removed_something: false,
-            sent_sandbox_versions: Default::default(),
             replaced_sandbox_versions: Vec::new(),
             vpc_eni_wait_started_at: None,
             wait_for_lambda_started_at: None,
@@ -6819,6 +6894,9 @@ mod tests {
                 previous.triggers = vec![batched];
             }
             let mut lambda = MockLambdaApi::new();
+            lambda
+                .expect_get_function_environment()
+                .returning(|_| Ok(HashMap::new()));
             lambda
                 .expect_update_function_configuration()
                 .times(1)
@@ -7387,6 +7465,9 @@ mod tests {
         has_url: bool,
     ) -> Arc<MockLambdaApi> {
         let mut mock_lambda = MockLambdaApi::new();
+        mock_lambda
+            .expect_get_function_environment()
+            .returning(|_| Ok(HashMap::new()));
 
         // Mock successful worker creation
         let worker_name = worker_name.to_string();
@@ -7438,6 +7519,9 @@ mod tests {
         if !has_url {
             let worker_name_for_config_update = worker_name.clone();
             mock_lambda
+                .expect_get_function_environment()
+                .returning(|_| Ok(HashMap::new()));
+            mock_lambda
                 .expect_update_function_configuration()
                 .returning(move |_, _| {
                     Ok(create_successful_function_response(
@@ -7477,6 +7561,9 @@ mod tests {
 
             // Mock update_function_configuration for self-binding env var update
             let worker_name_for_config_update = worker_name.clone();
+            mock_lambda
+                .expect_get_function_environment()
+                .returning(|_| Ok(HashMap::new()));
             mock_lambda
                 .expect_update_function_configuration()
                 .returning(move |_, _| {
@@ -8971,6 +9058,9 @@ mod tests {
 
         // Mock self-binding env var update
         let worker_name_for_config_update = worker_name.clone();
+        mock_lambda
+            .expect_get_function_environment()
+            .returning(|_| Ok(HashMap::new()));
         mock_lambda
             .expect_update_function_configuration()
             .returning(move |_, _| {
@@ -12114,18 +12204,19 @@ mod tests {
             let mut value =
                 serde_json::to_value(AwsWorkerController::mock_ready("basic-func")).unwrap();
             let object = value.as_object_mut().unwrap();
-            object.remove("sentSandboxVersions");
-            object.remove("sent_sandbox_versions");
+            object.insert("sent_sandbox_versions".into(), serde_json::json!({}));
             object.remove("replacedSandboxVersions");
             object.remove("replaced_sandbox_versions");
             let loaded: AwsWorkerController = serde_json::from_value(value).unwrap();
-            assert!(loaded.sent_sandbox_versions.is_empty());
             assert!(loaded.replaced_sandbox_versions.is_empty());
         }
 
-        /// A refresh that moves the binding records the version it replaced.
+        /// A worker whose state has no record of its binding (saved before the tracking, or
+        /// imported) still protects the version a refresh takes out: it is read from the live
+        /// function. The window starts when the function is Active again, not when the write
+        /// was built or sent.
         #[tokio::test]
-        async fn a_binding_refresh_records_the_replaced_version() {
+        async fn a_binding_refresh_protects_the_live_version_from_the_moment_it_settles() {
             let mut lambda = MockLambdaApi::new();
             active(&mut lambda);
             let live = rendered_environment("1.0").await;
@@ -12135,29 +12226,58 @@ mod tests {
             lambda
                 .expect_update_function_configuration()
                 .returning(|name, _| Ok(create_successful_function_response(name)));
-            let mut worker = AwsWorkerController::mock_ready("basic-func");
-            worker.sent_sandbox_versions = [(
-                alien_core::bindings::binding_env_var_name("sb"),
-                "1.0".to_string(),
-            )]
-            .into_iter()
-            .collect();
             let mut executor = executor(
                 lambda,
-                worker,
+                AwsWorkerController::mock_ready("basic-func"),
                 sandbox_on("2.0", AwsSandboxState::Ready),
                 None,
             )
             .await;
+            // The heartbeat, then the write.
             executor.step().await.unwrap();
             executor.step().await.unwrap();
             let state = executor.internal_state::<AwsWorkerController>().unwrap();
             assert_eq!(state.replaced_sandbox_versions.len(), 1);
             assert_eq!(state.replaced_sandbox_versions[0].version, "1.0");
             assert_eq!(
-                state.sent_sandbox_versions.values().collect::<Vec<_>>(),
-                vec!["2.0"]
+                state.replaced_sandbox_versions[0].replaced_at, None,
+                "the write is not applied yet: protected, window not started"
             );
+            executor.step().await.unwrap();
+            let state = executor.internal_state::<AwsWorkerController>().unwrap();
+            assert!(state.replaced_sandbox_versions[0].replaced_at.is_some());
+        }
+
+        /// A write that fails records nothing, so a retry still finds the live version.
+        #[tokio::test]
+        async fn a_failed_environment_write_records_no_replacement() {
+            let mut lambda = MockLambdaApi::new();
+            active(&mut lambda);
+            let live = rendered_environment("1.0").await;
+            lambda
+                .expect_get_function_environment()
+                .returning(move |_| Ok(live.clone()));
+            lambda
+                .expect_update_function_configuration()
+                .returning(|_, _| {
+                    Err(AlienError::new(
+                        alien_client_core::ErrorData::RemoteResourceConflict {
+                            message: "update in progress".to_string(),
+                            resource_type: "lambda".to_string(),
+                            resource_name: "basic-func".to_string(),
+                        },
+                    ))
+                });
+            let mut executor = executor(
+                lambda,
+                AwsWorkerController::mock_ready("basic-func"),
+                sandbox_on("2.0", AwsSandboxState::Ready),
+                None,
+            )
+            .await;
+            let _ = executor.step().await;
+            let state = executor.internal_state::<AwsWorkerController>().unwrap();
+            assert!(state.replaced_sandbox_versions.is_empty());
         }
 
         /// The staging case: the sandbox moved from 1.0 to 2.0 and the worker was never updated.
@@ -12170,7 +12290,7 @@ mod tests {
             assert!(carries(Some(&live), "1.0"));
             lambda
                 .expect_get_function_environment()
-                .times(1)
+                .times(2)
                 .returning(move |_| Ok(live.clone()));
             lambda
                 .expect_update_function_configuration()
@@ -12383,7 +12503,7 @@ mod tests {
             let live = rendered_environment("1.0").await;
             lambda
                 .expect_get_function_environment()
-                .times(1)
+                .times(2)
                 .returning(move |_| Ok(live.clone()));
             lambda
                 .expect_update_function_configuration()
@@ -12799,6 +12919,9 @@ mod tests {
         answer: InvokeResponse,
     ) -> Arc<MockLambdaApi> {
         let mut lambda = MockLambdaApi::new();
+        lambda
+            .expect_get_function_environment()
+            .returning(|_| Ok(HashMap::new()));
         lambda
             .expect_get_function_configuration()
             .returning(|_, _| Ok(create_successful_function_response(PROTECTED_WORKER_NAME)));
@@ -13501,6 +13624,9 @@ mod tests {
     async fn an_unprotected_update_writes_the_function_and_calls_no_verifier() {
         let calls = Arc::new(Mutex::new(Vec::new()));
         let mut lambda = MockLambdaApi::new();
+        lambda
+            .expect_get_function_environment()
+            .returning(|_| Ok(HashMap::new()));
         lambda
             .expect_get_function_configuration()
             .returning(|_, _| Ok(create_successful_function_response(PROTECTED_WORKER_NAME)));
