@@ -8839,6 +8839,20 @@ mod tests {
         image: &Arc<blocked_rollout::FakeImage>,
         live_environment: std::result::Result<std::collections::HashMap<String, String>, ()>,
     ) -> SingleControllerExecutor {
+        executor_with_worker_controller(
+            image,
+            live_environment,
+            crate::AwsWorkerController::mock_ready("api-fn"),
+        )
+        .await
+    }
+
+    /// As [`executor_with_real_worker`], with the worker controller's saved state given.
+    async fn executor_with_worker_controller(
+        image: &Arc<blocked_rollout::FakeImage>,
+        live_environment: std::result::Result<std::collections::HashMap<String, String>, ()>,
+        worker: crate::AwsWorkerController,
+    ) -> SingleControllerExecutor {
         use alien_aws_clients::lambda::MockLambdaApi;
         use blocked_rollout::*;
         let mut lambda = MockLambdaApi::new();
@@ -8882,9 +8896,7 @@ mod tests {
             .lifecycle(alien_core::ResourceLifecycle::Live)
             .build();
         saved
-            .set_internal_controller(Some(Box::new(crate::AwsWorkerController::mock_ready(
-                "api-fn",
-            ))))
+            .set_internal_controller(Some(Box::new(worker)))
             .unwrap();
         executor.insert_saved_resource("api", saved);
         executor
@@ -8926,6 +8938,52 @@ mod tests {
             .retire_blocked_by
             .is_empty());
         assert_eq!(*image.build_calls.lock().unwrap(), 0);
+    }
+
+    /// The in-flight case: the worker's binding moved from 30.0 to 31.0 a minute ago, so
+    /// invocations that started before still hold 30.0, and image 30.0 was replaced two hours
+    /// ago. The reclaim keeps both versions until the function's longest invocation has ended,
+    /// and frees 30.0 after.
+    #[tokio::test]
+    async fn a_real_worker_keeps_its_previous_binding_while_invocations_finish() {
+        use blocked_rollout::*;
+        for (changed_minutes_ago, keeps_previous) in [(1, true), (30, false)] {
+            let image = FakeImage::at_cap();
+            let mut worker = crate::AwsWorkerController::mock_ready("api-fn");
+            let live = sandbox_binding_variable("31.0");
+            let variable = alien_core::bindings::binding_env_var_name("agents");
+            worker.sent_sandbox_versions = [(variable.clone(), "30.0".to_string())]
+                .into_iter()
+                .collect();
+            let write = alien_aws_clients::lambda::Environment::builder()
+                .variables(live.clone())
+                .build();
+            worker.note_environment_write_for_test(
+                &write,
+                chrono::Utc::now() - chrono::Duration::minutes(changed_minutes_ago),
+            );
+            let mut executor = executor_with_worker_controller(&image, Ok(live), worker).await;
+            for _ in 0..8 {
+                executor
+                    .step()
+                    .await
+                    .expect("a draining image is a wait, not a failure");
+            }
+            let retired = image.retire_calls.lock().unwrap().clone();
+            assert!(
+                retired.iter().any(|v| v == "29.0"),
+                "the reclaim ran: {retired:?}"
+            );
+            assert!(
+                !retired.iter().any(|v| v == "31.0"),
+                "the live version stays"
+            );
+            assert_eq!(
+                !retired.iter().any(|v| v == "30.0"),
+                keeps_previous,
+                "changed {changed_minutes_ago} min ago: {retired:?}"
+            );
+        }
     }
 
     /// A worker whose function cannot be read, or whose binding names no concrete version, is
