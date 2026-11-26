@@ -5,6 +5,7 @@ pub mod dependencies;
 mod dockerignore;
 pub mod error;
 pub mod gcp_sandbox_image;
+mod image_size;
 mod lambda_image;
 #[cfg(test)]
 mod lambda_tests;
@@ -857,6 +858,13 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
                                         &settings.get_targets(),
                                         settings.platform.runtime_platform(),
                                         aws_connector,
+                                    )
+                                    .await?;
+                                    refuse_image_over_microvm_disk(
+                                        &sandbox,
+                                        Path::new(&image_uri),
+                                        &settings.get_targets(),
+                                        settings.platform.runtime_platform(),
                                     )
                                     .await?;
                                     Ok(image_uri)
@@ -2769,6 +2777,7 @@ async fn prepare_prebuilt_sandbox(
         aws_connector,
     )
     .await?;
+    refuse_image_over_microvm_disk(&sandbox, Path::new(&directory), &targets, platform).await?;
     // A local sandbox keeps its build directory: the local sandbox manager loads the archive
     // into the daemon the way it does for a local Container, and creates sessions from the id
     // the daemon reports, so no id has to be predicted here.
@@ -4708,6 +4717,45 @@ async fn compute_function_content_hash(dir: &Path) -> Result<String> {
     }
 
     Ok(format!("{:x}", hasher.finalize()))
+}
+
+/// Fails an AWS build whose image cannot build on the disk of the MicroVM size the sandbox's
+/// limits select. AWS reports that failure only as "An unknown error occurred", after pulling
+/// and exporting the image, so the build says it first, with the sizes and the limits to raise.
+/// The size is the largest uncompressed size across the built architectures; an image whose
+/// size cannot be measured is not checked.
+async fn refuse_image_over_microvm_disk(
+    sandbox: &Sandbox,
+    directory: &Path,
+    targets: &[alien_core::BinaryTarget],
+    platform: Platform,
+) -> Result<()> {
+    if platform != Platform::Aws {
+        return Ok(());
+    }
+    let paths: Vec<_> = targets
+        .iter()
+        .map(|target| directory.join(format!("{}.oci.tar", target.runtime_platform_id())))
+        .collect();
+    let measured = tokio::task::spawn_blocking(move || {
+        let mut largest = None;
+        for path in paths {
+            let size = image_size::uncompressed_size(&path)?;
+            largest = Some(largest.map_or(size, |current: u64| current.max(size)));
+        }
+        largest
+    })
+    .await
+    .ok()
+    .flatten();
+    let Some(bytes) = measured else {
+        return Ok(());
+    };
+    sandbox.check_microvm_image_fits(bytes).map_err(|refusal| {
+        AlienError::new(ErrorData::BuildConfigInvalid {
+            message: refusal.message,
+        })
+    })
 }
 
 #[cfg(test)]
@@ -7608,8 +7656,9 @@ mod sandbox_build_tests {
                     }
                 }
                 assert_eq!(sandbox.image_user, requires_new_reader.then_some(uid));
-                let release = serde_json::to_value(sandbox).unwrap();
-                let old = serde_json::from_value::<PreviousSandboxReader>(release);
+                let old = serde_json::from_value::<PreviousSandboxReader>(
+                    serde_json::to_value(sandbox).unwrap(),
+                );
                 if requires_new_reader {
                     assert!(old.unwrap_err().to_string().contains("imageUser"));
                 } else {

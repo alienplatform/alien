@@ -409,6 +409,25 @@ pub enum ErrorData {
         reason: String,
     },
 
+    /// A sandbox image is too large for the disk of the MicroVM size its limits select.
+    #[error(
+        code = "SANDBOX_IMAGE_TOO_LARGE",
+        message = "Sandbox '{resource_id}' image is {image_size} uncompressed, which does not fit the {disk} disk of the MicroVM its limits select: {advice}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    SandboxImageTooLarge {
+        /// The sandbox whose image does not fit
+        resource_id: String,
+        /// The image's uncompressed size, in deployer-readable units
+        image_size: String,
+        /// The disk of the selected size, in deployer-readable units
+        disk: String,
+        /// What to change
+        advice: String,
+    },
+
     /// A sandbox limit is missing or not a valid quantity.
     #[error(
         code = "SANDBOX_LIMIT_INVALID",
