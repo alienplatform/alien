@@ -269,10 +269,26 @@ pub struct TestWorkerController {
     /// As a dependent: it can update against a dependency that is not Running.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) updates_during_dependency_change: bool,
+    /// The sandbox versions this workload reports it can still launch, as a container
+    /// scheduler reports its replicas' bindings. Absent: the controller cannot tell.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) launchable_sandbox_versions: Option<crate::core::LaunchableSandboxVersions>,
 }
 
 #[controller]
 impl TestWorkerController {
+    async fn launchable_sandbox_versions(
+        &self,
+        _ctx: &ResourceControllerContext<'_>,
+        _dependent_id: &str,
+        _sandbox_id: &str,
+    ) -> Result<crate::core::LaunchableSandboxVersions> {
+        Ok(self
+            .launchable_sandbox_versions
+            .clone()
+            .unwrap_or(crate::core::LaunchableSandboxVersions::NotObserved))
+    }
+
     fn dependents_may_update(&self) -> bool {
         self.dependents_may_update
     }

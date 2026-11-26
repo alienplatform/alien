@@ -360,6 +360,9 @@ async fn fill_the_image_to_the_version_cap() {
     let s3 = S3Client::new(Client::new(), provider());
     let lambda = LambdaMicrovmsClient::new(Client::new(), provider());
     let run = uuid::Uuid::new_v4().simple().to_string()[..6].to_string();
+    // `FILL_KEEP_ACTIVE=1` leaves every earlier version ACTIVE, as an install that never
+    // retired any is: the controller under test has to observe and retire them itself.
+    let keep_active = std::env::var("FILL_KEEP_ACTIVE").is_ok_and(|v| v == "1");
 
     for n in 0..100 {
         let versions = lambda.list_microvm_image_versions(&image).await.unwrap();
@@ -390,6 +393,9 @@ async fn fill_the_image_to_the_version_cap() {
                 let version = rolled.image_version.expect("a version");
                 wait_version(&lambda, &image, &version).await;
                 for old in versions {
+                    if keep_active {
+                        break;
+                    }
                     let old = old.image_version.unwrap();
                     if old != version {
                         // Skip versions already inactive: repeating the call for every old
@@ -507,4 +513,38 @@ async fn show_probe_versions() {
             got.state, got.status, got.state_reason
         );
     }
+}
+
+/// Uploads a prebuilt bundle (for example one carrying the shipped agent) to the probe bucket
+/// under `sandbox-bundle/<PROBE_FIXTURE_NAME>/bundle.zip`, records the key for cleanup and
+/// prints `PROBE_FIXTURE_URI`. `PROBE_FIXTURE_ZIP` is the local file.
+#[tokio::test]
+#[ignore]
+async fn put_fixture_bundle() {
+    let mut state = load();
+    let bucket = state.bucket.clone().expect("a probe bucket");
+    let name = std::env::var("PROBE_FIXTURE_NAME").expect("PROBE_FIXTURE_NAME");
+    assert!(
+        !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'),
+        "PROBE_FIXTURE_NAME is letters, digits and dashes"
+    );
+    let key = format!("sandbox-bundle/{name}/bundle.zip");
+    assert!(!state.keys.contains(&key), "{key} already exists");
+    let body = std::fs::read(std::env::var("PROBE_FIXTURE_ZIP").expect("PROBE_FIXTURE_ZIP"))
+        .expect("read the fixture zip");
+    S3Client::new(Client::new(), provider())
+        .put_object(&PutObjectRequest {
+            bucket: bucket.clone(),
+            key: key.clone(),
+            body,
+            content_type: Some("application/zip".to_string()),
+            content_md5: None,
+            server_side_encryption: None,
+            storage_class: None,
+        })
+        .await
+        .expect("put fixture bundle");
+    state.keys.push(key.clone());
+    save(&state);
+    println!("PROBE_FIXTURE_URI=s3://{bucket}/{key}");
 }

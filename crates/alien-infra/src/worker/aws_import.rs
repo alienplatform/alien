@@ -72,6 +72,7 @@ impl ResourceImporter for AwsWorkerImporter {
             eventbridge_rule_names: data.eventbridge_rule_names,
             eventbridge_permission_statement_ids: data.eventbridge_permission_statement_ids,
             delete_removed_something: false,
+            replaced_sandbox_versions: Vec::new(),
             vpc_eni_wait_started_at: None,
             wait_for_lambda_started_at: None,
             wait_for_image_started_at: None,
