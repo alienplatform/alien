@@ -1049,7 +1049,7 @@ impl AwsWorkerController {
             .collect())
     }
 
-    /// Records, after the write succeeded, the versions it took out. They stay protected until
+    /// Records, before the write is sent, the versions it takes out. They stay protected until
     /// [`Self::settle_replaced_sandbox_versions`] starts their window.
     fn note_replaced_sandbox_versions(&mut self, leaving: Vec<(String, String)>) {
         for (variable, version) in leaving {
@@ -3416,6 +3416,9 @@ impl AwsWorkerController {
             request.environment.as_ref(),
         )
         .await?;
+        // Recorded before the write: a write that lands and then errors must not lose the
+        // protection. Pending is protected, and if the write failed the version is still live.
+        self.note_replaced_sandbox_versions(leaving);
         client
             .update_function_configuration(&arn, request)
             .await
@@ -3423,7 +3426,6 @@ impl AwsWorkerController {
                 message: "Failed to refresh the worker's linked bindings".to_string(),
                 resource_id: Some(worker_config.id.clone()),
             })?;
-        self.note_replaced_sandbox_versions(leaving);
         self.wait_for_lambda_started_at = None;
         Ok(HandlerAction::Continue {
             state: RefreshingLinkedBindingsWaitForActive,
@@ -3698,6 +3700,10 @@ impl AwsWorkerController {
             }
             None => Vec::new(),
         };
+        // Recorded before any write: one that lands and then errors (or whose follow-up write
+        // fails) must not lose the protection. Pending is protected, and if nothing landed the
+        // version is still live.
+        self.note_replaced_sandbox_versions(leaving);
 
         // On a protected install all of the update's writes go to the verifier in one request,
         // which it checks in full before it sends any: a refusal leaves the function on the
@@ -3764,7 +3770,6 @@ impl AwsWorkerController {
                 })?;
         }
 
-        self.note_replaced_sandbox_versions(leaving);
         // Always transition to wait state - linear flow
         self.wait_for_lambda_started_at = None;
         Ok(HandlerAction::Continue {
@@ -12248,25 +12253,42 @@ mod tests {
             assert!(state.replaced_sandbox_versions[0].replaced_at.is_some());
         }
 
-        /// A write that fails records nothing, so a retry still finds the live version.
+        /// A write that lands but errors (a timeout, or a later write of the same update failing)
+        /// must not lose the protection: the retry reads the live environment, which already
+        /// carries 2.0, so only the entry recorded before the write still protects 1.0.
         #[tokio::test]
-        async fn a_failed_environment_write_records_no_replacement() {
+        async fn a_write_that_lands_and_errors_still_protects_the_old_version() {
             let mut lambda = MockLambdaApi::new();
             active(&mut lambda);
-            let live = rendered_environment("1.0").await;
-            lambda
-                .expect_get_function_environment()
-                .returning(move |_| Ok(live.clone()));
+            let old = rendered_environment("1.0").await;
+            let new = rendered_environment("2.0").await;
+            let reads = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let counter = reads.clone();
+            lambda.expect_get_function_environment().returning(move |_| {
+                // The first read sees 1.0; once the write has "landed" the function carries 2.0.
+                if counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst) < 2 {
+                    Ok(old.clone())
+                } else {
+                    Ok(new.clone())
+                }
+            });
+            let writes = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let write_counter = writes.clone();
             lambda
                 .expect_update_function_configuration()
-                .returning(|_, _| {
-                    Err(AlienError::new(
-                        alien_client_core::ErrorData::RemoteResourceConflict {
-                            message: "update in progress".to_string(),
-                            resource_type: "lambda".to_string(),
-                            resource_name: "basic-func".to_string(),
-                        },
-                    ))
+                .returning(move |name, _| {
+                    if write_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                        // Lands on the function, but the response is lost.
+                        Err(AlienError::new(
+                            alien_client_core::ErrorData::RemoteResourceConflict {
+                                message: "timed out".to_string(),
+                                resource_type: "lambda".to_string(),
+                                resource_name: "basic-func".to_string(),
+                            },
+                        ))
+                    } else {
+                        Ok(create_successful_function_response(name))
+                    }
                 });
             let mut executor = executor(
                 lambda,
@@ -12275,9 +12297,22 @@ mod tests {
                 None,
             )
             .await;
-            let _ = executor.step().await;
+            // Heartbeat, the write that errors, then the retry until the write is applied.
+            for _ in 0..6 {
+                let _ = executor.step().await;
+                if writes.load(std::sync::atomic::Ordering::SeqCst) >= 2 {
+                    break;
+                }
+            }
             let state = executor.internal_state::<AwsWorkerController>().unwrap();
-            assert!(state.replaced_sandbox_versions.is_empty());
+            assert!(
+                state
+                    .replaced_sandbox_versions
+                    .iter()
+                    .any(|r| r.version == "1.0"),
+                "1.0 must stay protected after the write that errored: {:?}",
+                state.replaced_sandbox_versions
+            );
         }
 
         /// The staging case: the sandbox moved from 1.0 to 2.0 and the worker was never updated.
