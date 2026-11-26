@@ -406,7 +406,8 @@ fn resources_requiring_domain_metadata(stack: &Stack, config: &DeploymentConfig)
     resources
 }
 
-fn external_binding_required_types(platform: Platform) -> &'static [&'static str] {
+/// Resource types a deployment on `platform` must receive as external bindings.
+pub fn external_binding_required_types(platform: Platform) -> &'static [&'static str] {
     match platform {
         Platform::Kubernetes => &["storage", "queue", "kv", "artifact-registry", "redis"],
         Platform::Machines => &["storage", "queue", "kv", "vault", "postgres", "redis"],
